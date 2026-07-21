@@ -1,0 +1,1169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1, viewport-fit=cover"
+  >
+
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Recipe Converter">
+
+  <title>Recipe Resize and US Converter</title>
+
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    :root {
+      color-scheme: light dark;
+      --background: #f4f4f6;
+      --surface: #ffffff;
+      --text: #1d1d1f;
+      --muted: #6e6e73;
+      --border: #d0d0d5;
+      --primary: #007aff;
+      --primary-text: #ffffff;
+      --secondary: #e9e9ed;
+      --secondary-text: #1d1d1f;
+      --result-bg: #f5f8fc;
+      --warning-bg: #fff8e8;
+      --warning-border: #ead7a4;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      padding:
+        max(14px, env(safe-area-inset-top))
+        max(14px, env(safe-area-inset-right))
+        max(24px, env(safe-area-inset-bottom))
+        max(14px, env(safe-area-inset-left));
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--background);
+      color: var(--text);
+    }
+
+    .app {
+      width: 100%;
+      max-width: 720px;
+      margin: 0 auto;
+      padding: 24px;
+      background: var(--surface);
+      border-radius: 22px;
+      box-shadow: 0 8px 28px rgba(0, 0, 0, 0.08);
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      text-align: center;
+      font-size: 28px;
+    }
+
+    .subtitle {
+      margin: 0 0 22px;
+      color: var(--muted);
+      text-align: center;
+      line-height: 1.45;
+    }
+
+    label {
+      display: block;
+      margin: 17px 0 7px;
+      font-weight: 650;
+    }
+
+    input,
+    textarea,
+    button {
+      width: 100%;
+      font: inherit;
+    }
+
+    input,
+    textarea {
+      padding: 13px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: var(--surface);
+      color: var(--text);
+      font-size: 17px;
+    }
+
+    textarea {
+      min-height: 220px;
+      resize: vertical;
+      line-height: 1.55;
+    }
+
+    input:focus,
+    textarea:focus,
+    button:focus-visible {
+      outline: 3px solid rgba(0, 122, 255, 0.22);
+      outline-offset: 2px;
+    }
+
+    .multiplier-row {
+      display: grid;
+      grid-template-columns: 58px 1fr 58px;
+      gap: 10px;
+      align-items: center;
+    }
+
+    .preset-row {
+      display: grid;
+      grid-template-columns: repeat(6, 1fr);
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+
+    .preset-button {
+      min-height: 40px;
+      padding: 8px 4px;
+      font-size: 14px;
+      background: var(--secondary);
+      color: var(--secondary-text);
+    }
+
+    @media (max-width: 520px) {
+      .preset-row {
+        grid-template-columns: repeat(3, 1fr);
+      }
+    }
+
+    #multiplier {
+      text-align: center;
+      font-weight: 700;
+    }
+
+    button {
+      min-height: 50px;
+      padding: 12px;
+      border: none;
+      border-radius: 13px;
+      cursor: pointer;
+      font-size: 17px;
+      font-weight: 650;
+    }
+
+    button:active {
+      transform: scale(0.99);
+    }
+
+    .multiplier-button {
+      background: var(--secondary);
+      color: var(--secondary-text);
+      font-size: 25px;
+    }
+
+    .primary {
+      background: var(--primary);
+      color: var(--primary-text);
+    }
+
+    .secondary {
+      background: var(--secondary);
+      color: var(--secondary-text);
+    }
+
+    .convert-button {
+      margin-top: 18px;
+    }
+
+    .button-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-top: 12px;
+    }
+
+    .result-section {
+      margin-top: 28px;
+    }
+
+    .result-heading {
+      margin-bottom: 10px;
+      font-size: 20px;
+      font-weight: 750;
+    }
+
+    .result-box {
+      min-height: 220px;
+      background: var(--result-bg);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      white-space: pre-wrap;
+    }
+
+    .message {
+      padding: 14px;
+      margin-top: 12px;
+      border: 1px solid var(--warning-border);
+      border-radius: 12px;
+      background: var(--warning-bg);
+      color: var(--text);
+      line-height: 1.45;
+      font-size: 14px;
+    }
+
+    .note {
+      margin-top: 18px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    @media (max-width: 520px) {
+      .app {
+        padding: 18px;
+        border-radius: 18px;
+      }
+
+      .button-row {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --background: #111214;
+        --surface: #1c1d20;
+        --text: #f4f4f5;
+        --muted: #b0b3b8;
+        --border: #3a3d42;
+        --secondary: #2d3035;
+        --secondary-text: #f4f4f5;
+        --result-bg: #24262a;
+        --warning-bg: #302b1f;
+        --warning-border: #665b37;
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <main class="app">
+    <h1>🍰 Recipe Converter</h1>
+
+    <p class="subtitle">
+      Paste a full metric recipe, resize it, and convert it into a US-style
+      recipe list.
+    </p>
+
+    <label for="multiplier">Recipe multiplier</label>
+
+    <div class="preset-row">
+      <button class="preset-button" type="button" data-preset="0.125" aria-label="Set multiplier to one eighth">÷8</button>
+      <button class="preset-button" type="button" data-preset="0.25" aria-label="Set multiplier to one quarter">÷4</button>
+      <button class="preset-button" type="button" data-preset="0.5" aria-label="Set multiplier to one half">÷2</button>
+      <button class="preset-button" type="button" data-preset="2" aria-label="Set multiplier to double">×2</button>
+      <button class="preset-button" type="button" data-preset="4" aria-label="Set multiplier to quadruple">×4</button>
+      <button class="preset-button" type="button" data-preset="8" aria-label="Set multiplier to eight times">×8</button>
+    </div>
+
+    <div class="multiplier-row">
+      <button
+        id="decreaseButton"
+        class="multiplier-button"
+        type="button"
+        aria-label="Decrease multiplier by 0.5"
+      >
+        −
+      </button>
+
+      <input
+        id="multiplier"
+        type="number"
+        inputmode="decimal"
+        min="0.1"
+        step="0.5"
+        value="1"
+      >
+
+      <button
+        id="increaseButton"
+        class="multiplier-button"
+        type="button"
+        aria-label="Increase multiplier by 0.5"
+      >
+        +
+      </button>
+    </div>
+
+    <label for="recipeInput">Paste your recipe</label>
+
+    <textarea
+      id="recipeInput"
+      placeholder="Example:
+
+300 g flour
+150 g sugar
+250 ml milk
+100 g butter
+8 g yeast
+5 g salt"
+    ></textarea>
+
+    <button id="convertButton" class="primary convert-button" type="button">
+      Convert Recipe
+    </button>
+
+    <div class="button-row">
+      <button id="clearButton" class="secondary" type="button">
+        Clear
+      </button>
+
+      <button id="copyButton" class="secondary" type="button">
+        Copy Converted Recipe
+      </button>
+    </div>
+
+    <section class="result-section">
+      <div class="result-heading">Converted recipe</div>
+
+      <textarea
+        id="resultOutput"
+        class="result-box"
+        readonly
+        aria-live="polite"
+        placeholder="Your converted recipe will appear here as one list."
+      ></textarea>
+
+      <div id="conversionNote" class="message" hidden></div>
+    </section>
+
+    <p class="note">
+      Cup conversions for dry ingredients are approximate because every
+      ingredient has a different density. Known ingredients convert to cups,
+      tablespoons, and teaspoons. Unknown ingredients fall back to pounds.
+      Ounces are never used — any ounce amounts in your input are reported
+      back in pounds instead.
+    </p>
+  </main>
+
+  <script>
+    "use strict";
+
+    const multiplierInput = document.getElementById("multiplier");
+    const recipeInput = document.getElementById("recipeInput");
+    const resultOutput = document.getElementById("resultOutput");
+    const conversionNote = document.getElementById("conversionNote");
+
+    const decreaseButton = document.getElementById("decreaseButton");
+    const increaseButton = document.getElementById("increaseButton");
+    const convertButton = document.getElementById("convertButton");
+    const clearButton = document.getElementById("clearButton");
+    const copyButton = document.getElementById("copyButton");
+    const presetButtons = document.querySelectorAll(".preset-button");
+
+    // Lowest multiplier the ÷8 shortcut needs (1/8 = 0.125), with a little
+    // headroom so it isn't rejected by floating-point rounding.
+    const MIN_MULTIPLIER = 0.1;
+
+    /*
+      Approximate grams per US cup for common baking ingredients.
+      More specific ingredient names should appear before general names.
+    */
+    const ingredientDensities = [
+      { names: ["bread flour"], gramsPerCup: 120 },
+      { names: ["cake flour"], gramsPerCup: 115 },
+      { names: ["whole wheat flour", "wholemeal flour"], gramsPerCup: 120 },
+      { names: ["all-purpose flour", "all purpose flour", "plain flour", "flour"], gramsPerCup: 120 },
+
+      { names: ["powdered sugar", "icing sugar", "confectioners sugar", "confectioner's sugar"], gramsPerCup: 120 },
+      { names: ["brown sugar"], gramsPerCup: 200 },
+      { names: ["granulated sugar", "white sugar", "caster sugar", "castor sugar", "sugar"], gramsPerCup: 200 },
+
+      { names: ["cocoa powder", "cacao powder", "cocoa"], gramsPerCup: 85 },
+      { names: ["cornstarch", "corn starch"], gramsPerCup: 128 },
+      { names: ["baking powder"], gramsPerCup: 192 },
+      { names: ["baking soda", "bicarbonate of soda"], gramsPerCup: 220 },
+      { names: ["salt"], gramsPerCup: 288 },
+
+      { names: ["rolled oats", "oats"], gramsPerCup: 90 },
+      { names: ["almond flour", "almond meal"], gramsPerCup: 96 },
+      { names: ["desiccated coconut", "shredded coconut", "coconut"], gramsPerCup: 85 },
+
+      { names: ["chocolate chips", "choc chips"], gramsPerCup: 170 },
+      { names: ["chopped chocolate", "chocolate"], gramsPerCup: 170 },
+      { names: ["chopped nuts", "walnuts", "pecans", "almonds", "nuts"], gramsPerCup: 120 },
+
+      { names: ["butter"], gramsPerCup: 227 },
+      { names: ["shortening"], gramsPerCup: 205 },
+      { names: ["cream cheese"], gramsPerCup: 227 },
+      { names: ["peanut butter"], gramsPerCup: 258 },
+      { names: ["yogurt", "yoghurt"], gramsPerCup: 245 },
+      { names: ["sour cream"], gramsPerCup: 240 },
+
+      { names: ["honey"], gramsPerCup: 340 },
+      { names: ["maple syrup"], gramsPerCup: 315 },
+      { names: ["molasses", "treacle"], gramsPerCup: 337 },
+
+      { names: ["active dry yeast", "instant yeast", "yeast"], gramsPerCup: 144 }
+    ];
+
+    function formatNumber(value, maximumDecimals = 2) {
+      if (!Number.isFinite(value)) {
+        return "0";
+      }
+
+      return value.toLocaleString(undefined, {
+        maximumFractionDigits: maximumDecimals
+      });
+    }
+
+    function normalizeUnit(unit) {
+      const cleanedUnit = unit.toLowerCase().trim();
+
+      const unitMap = {
+        g: "g",
+        gram: "g",
+        grams: "g",
+
+        kg: "kg",
+        kgs: "kg",
+        kilogram: "kg",
+        kilograms: "kg",
+
+        ml: "ml",
+        milliliter: "ml",
+        milliliters: "ml",
+        millilitre: "ml",
+        millilitres: "ml",
+
+        l: "l",
+        liter: "l",
+        liters: "l",
+        litre: "l",
+        litres: "l",
+
+        cup: "cup",
+        cups: "cup",
+
+        tbsp: "tbsp",
+        tbsps: "tbsp",
+        tablespoon: "tbsp",
+        tablespoons: "tbsp",
+
+        tsp: "tsp",
+        tsps: "tsp",
+        teaspoon: "tsp",
+        teaspoons: "tsp",
+
+        oz: "oz",
+        ounce: "oz",
+        ounces: "oz",
+
+        lb: "lb",
+        lbs: "lb",
+        pound: "lb",
+        pounds: "lb"
+      };
+
+      return unitMap[cleanedUnit] || cleanedUnit;
+    }
+
+    function findDensity(ingredientName) {
+      const name = ingredientName.toLowerCase();
+
+      for (const item of ingredientDensities) {
+        if (item.names.some((keyword) => name.includes(keyword))) {
+          return item.gramsPerCup;
+        }
+      }
+
+      return null;
+    }
+
+    function decimalToFraction(value) {
+      const fractions = [
+        { value: 0, text: "" },
+        { value: 1 / 8, text: "⅛" },
+        { value: 1 / 4, text: "¼" },
+        { value: 1 / 3, text: "⅓" },
+        { value: 3 / 8, text: "⅜" },
+        { value: 1 / 2, text: "½" },
+        { value: 5 / 8, text: "⅝" },
+        { value: 2 / 3, text: "⅔" },
+        { value: 3 / 4, text: "¾" },
+        { value: 7 / 8, text: "⅞" },
+        { value: 1, text: "" }
+      ];
+
+      const whole = Math.floor(value);
+      const decimal = value - whole;
+
+      let closest = fractions[0];
+
+      for (const fraction of fractions) {
+        if (
+          Math.abs(decimal - fraction.value) <
+          Math.abs(decimal - closest.value)
+        ) {
+          closest = fraction;
+        }
+      }
+
+      let adjustedWhole = whole;
+
+      if (closest.value === 1) {
+        adjustedWhole += 1;
+        closest = fractions[0];
+      }
+
+      if (adjustedWhole === 0 && !closest.text) {
+        return "0";
+      }
+
+      if (adjustedWhole > 0 && closest.text) {
+        return `${adjustedWhole} ${closest.text}`;
+      }
+
+      if (adjustedWhole > 0) {
+        return String(adjustedWhole);
+      }
+
+      return closest.text;
+    }
+
+    // Fractions that correspond to sizes in a standard US measuring cup set.
+    // Deliberately excludes 3/8, 5/8, 7/8 — nobody owns a single cup for those.
+    const NICE_CUP_FRACTIONS_IN_TSP = [
+      { tsp: 0, label: "" },
+      { tsp: 6, label: "⅛" },
+      { tsp: 12, label: "¼" },
+      { tsp: 16, label: "⅓" },
+      { tsp: 24, label: "½" },
+      { tsp: 32, label: "⅔" },
+      { tsp: 36, label: "¾" }
+    ];
+
+    function cupsToFriendlyUS(cups) {
+      if (cups >= 0.25) {
+        // Snap to the nearest teaspoon (1/48 cup) first for precision, then
+        // find the largest "nice" cup fraction that fits, and express
+        // whatever's left over as tbsp/tsp rather than an odd cup fraction.
+        const totalTsp = Math.round(cups * 48);
+        const wholeCups = Math.floor(totalTsp / 48);
+        const tspIntoCup = totalTsp - wholeCups * 48;
+
+        let chosen = NICE_CUP_FRACTIONS_IN_TSP[0];
+        for (const candidate of NICE_CUP_FRACTIONS_IN_TSP) {
+          if (candidate.tsp <= tspIntoCup) {
+            chosen = candidate;
+          }
+        }
+
+        const remainderTsp = tspIntoCup - chosen.tsp;
+        const totalCupsValue = wholeCups + chosen.tsp / 48;
+        const unitWord = totalCupsValue === 1 && remainderTsp === 0 ? "cup" : "cups";
+
+        let cupLabel;
+        if (wholeCups > 0 && chosen.label) {
+          cupLabel = `${wholeCups} ${chosen.label} ${unitWord}`;
+        } else if (wholeCups > 0) {
+          cupLabel = `${wholeCups} ${unitWord}`;
+        } else if (chosen.label) {
+          cupLabel = `${chosen.label} ${unitWord}`;
+        } else {
+          cupLabel = `0 ${unitWord}`;
+        }
+
+        if (remainderTsp === 0) {
+          return cupLabel;
+        }
+
+        const remainderTbsp = Math.floor(remainderTsp / 3);
+        const remainderTspOnly = remainderTsp % 3;
+        const remainderParts = [];
+
+        if (remainderTbsp > 0) {
+          remainderParts.push(`${remainderTbsp} tbsp`);
+        }
+
+        if (remainderTspOnly > 0) {
+          remainderParts.push(`${remainderTspOnly} tsp`);
+        }
+
+        return `${cupLabel} ${remainderParts.join(" ")}`;
+      }
+
+      // Below 1/4 cup: split into whole tablespoons + a leftover teaspoon
+      // amount (e.g. 10 tsp -> "3 tbsp + 1 tsp") instead of one fractional
+      // tbsp figure like "3¼ tbsp", which isn't something you can measure.
+      const totalTeaspoons = cups * 48;
+      const roundedTotalTeaspoons = Math.max(1 / 8, Math.round(totalTeaspoons * 8) / 8);
+      const wholeTablespoons = Math.floor(roundedTotalTeaspoons / 3);
+      const remainderTeaspoons =
+        Math.round((roundedTotalTeaspoons - wholeTablespoons * 3) * 8) / 8;
+
+      if (wholeTablespoons > 0 && remainderTeaspoons > 0) {
+        return `${wholeTablespoons} tbsp ${decimalToFraction(remainderTeaspoons)} tsp`;
+      }
+
+      if (wholeTablespoons > 0) {
+        return `${wholeTablespoons} tbsp`;
+      }
+
+      return `${decimalToFraction(remainderTeaspoons)} tsp`;
+    }
+
+    function liquidToFriendlyUS(millilitres) {
+      const cups = millilitres / 236.5882365;
+
+      if (cups >= 0.25) {
+        return cupsToFriendlyUS(cups);
+      }
+
+      const tablespoons = millilitres / 14.78676478125;
+
+      if (tablespoons >= 1) {
+        const roundedTablespoons = Math.round(tablespoons * 4) / 4;
+        return `${decimalToFraction(roundedTablespoons)} tbsp`;
+      }
+
+      const teaspoons = millilitres / 4.92892159375;
+      const roundedTeaspoons = Math.max(1 / 8, Math.round(teaspoons * 8) / 8);
+
+      return `${decimalToFraction(roundedTeaspoons)} tsp`;
+    }
+
+    function weightToUS(grams, ingredientName) {
+      const gramsPerCup = findDensity(ingredientName);
+
+      if (gramsPerCup) {
+        return {
+          text: cupsToFriendlyUS(grams / gramsPerCup),
+          approximate: true
+        };
+      }
+
+      // Unknown density: we can't convert to cups accurately, so fall back
+      // to pounds rather than ounces.
+      return {
+        text: poundsToFriendly(grams / 453.59237),
+        approximate: true
+      };
+    }
+
+    // Same "nice fraction" idea as cups, but for pounds — there's no smaller
+    // unit to express a remainder in (no ounces), so this just snaps to
+    // whichever friendly fraction (1/8, 1/4, 1/3, 1/2, 2/3, 3/4) is closest.
+    const NICE_FRACTIONS = [
+      { value: 0, label: "" },
+      { value: 1 / 8, label: "⅛" },
+      { value: 1 / 4, label: "¼" },
+      { value: 1 / 3, label: "⅓" },
+      { value: 1 / 2, label: "½" },
+      { value: 2 / 3, label: "⅔" },
+      { value: 3 / 4, label: "¾" },
+      { value: 1, label: "" }
+    ];
+
+    function poundsToFriendly(amount) {
+      const whole = Math.floor(amount);
+      const fractional = amount - whole;
+
+      let closest = NICE_FRACTIONS[0];
+
+      for (const candidate of NICE_FRACTIONS) {
+        if (
+          Math.abs(fractional - candidate.value) <
+          Math.abs(fractional - closest.value)
+        ) {
+          closest = candidate;
+        }
+      }
+
+      let finalWhole = whole;
+
+      if (closest.value === 1) {
+        finalWhole += 1;
+        closest = NICE_FRACTIONS[0];
+      }
+
+      if (finalWhole > 0 && closest.label) {
+        return `${finalWhole} ${closest.label} lb`;
+      }
+
+      if (finalWhole > 0) {
+        return `${finalWhole} lb`;
+      }
+
+      if (closest.label) {
+        return `${closest.label} lb`;
+      }
+
+      return "0 lb";
+    }
+
+    // For unitless counted items (eggs, lemons, cloves...): resize to the
+    // nearest quarter and show as a whole number or simple fraction.
+    function formatCount(amount) {
+      const rounded = Math.round(amount * 4) / 4;
+
+      if (Number.isInteger(rounded)) {
+        return String(rounded);
+      }
+
+      return decimalToFraction(rounded);
+    }
+
+    // Converts fraction notations recipes commonly use ("1¾", "1 ¾", "¾",
+    // "1 1/2", "3/4") into plain decimals ("1.75", "1.5", "0.75") so the
+    // amount-matching regexes below can find them.
+    function normalizeFractionsInLine(line) {
+      const vulgarFractionValues = {
+        "¼": 0.25, "½": 0.5, "¾": 0.75,
+        "⅓": 1 / 3, "⅔": 2 / 3,
+        "⅛": 0.125, "⅜": 0.375, "⅝": 0.625, "⅞": 0.875
+      };
+
+      let result = line;
+
+      // Mixed whole number + vulgar fraction: "1¾" or "1 ¾"
+      result = result.replace(
+        /(\d+)\s?([¼½¾⅓⅔⅛⅜⅝⅞])/g,
+        (match, whole, frac) => String(Number(whole) + vulgarFractionValues[frac])
+      );
+
+      // Standalone vulgar fraction: "¾ cup"
+      result = result.replace(
+        /([¼½¾⅓⅔⅛⅜⅝⅞])/g,
+        (match, frac) => String(vulgarFractionValues[frac])
+      );
+
+      // Mixed whole number + slash fraction: "1 1/2"
+      result = result.replace(
+        /(\d+)\s+(\d+)\/(\d+)/g,
+        (match, whole, num, den) => String(Number(whole) + Number(num) / Number(den))
+      );
+
+      // Standalone slash fraction: "3/4"
+      result = result.replace(
+        /(\d+)\/(\d+)/g,
+        (match, num, den) => String(Number(num) / Number(den))
+      );
+
+      return result;
+    }
+
+    // Strips parenthetical notes like "(210g)" or "(about 2 lemons)", trailing
+    // bare metric weight mentions like ", 425g" (not in parentheses), and any
+    // leftover trailing punctuation, so the output ingredient name is clean.
+    function cleanIngredientName(text) {
+      let result = text.replace(/\([^)]*\)/g, "");
+
+      const trailingMetricWeight =
+        /[,;]?\s*\d+(?:[.,]\d+)?\s?(?:g|grams?|kg|kgs?|kilograms?|ml|milliliters?|millilitres?|l|liters?|litres?)\.?\s*$/i;
+
+      // Loop in case there's more than one trailing weight mention.
+      let previous;
+      do {
+        previous = result;
+        result = result.replace(trailingMetricWeight, "");
+      } while (result !== previous);
+
+      return result
+        .replace(/\s{2,}/g, " ")
+        .replace(/[,;:\-–]+$/, "")
+        .trim();
+    }
+
+    function parseRecipeLine(line) {
+      const cleanedLine = line
+        .trim()
+        .replace(/^[-•*]\s*/, "");
+
+      if (!cleanedLine) {
+        return null;
+      }
+
+      // Section headers like "Crust:" or "Filling:" have nothing to resize —
+      // pass them through unchanged rather than flagging them as a problem.
+      if (/:\s*$/.test(cleanedLine) && !/\d/.test(cleanedLine)) {
+        return { passthrough: true, originalLine: cleanedLine };
+      }
+
+      // Oven temps / bake notes like "375F fan, light golden brown" aren't
+      // ingredient amounts either — pass them through unchanged too.
+      if (/^\d+\s?°?\s?(?:F|C)\b/i.test(cleanedLine)) {
+        return { passthrough: true, originalLine: cleanedLine };
+      }
+
+      const normalizedLine = normalizeFractionsInLine(cleanedLine);
+
+      const supportedUnits =
+        "g|gram|grams|kg|kgs|kilogram|kilograms|" +
+        "ml|milliliter|milliliters|millilitre|millilitres|" +
+        "l|liter|liters|litre|litres|" +
+        "cups?|tbsps?|tablespoons?|tsps?|teaspoons?|" +
+        "oz|ounces?|lbs?|pounds?";
+
+      // If a line stacks two US-volume measurements together, like
+      // "1 tbsp 2 tsp salt" or "10½ cups 2 tbsp coconut", combine them into
+      // one total instead of silently dropping the second amount — that was
+      // previously getting swallowed into the ingredient name unresized.
+      const volumeUnits = ["cup", "tbsp", "tsp"];
+      const tspPerUnit = { cup: 48, tbsp: 3, tsp: 1 };
+
+      const leadingAmountUnitPattern = new RegExp(
+        "^(\\d+(?:[.,]\\d+)?)\\s*(" + supportedUnits + ")\\b\\s*(?:of\\s+)?",
+        "i"
+      );
+
+      let remainingText = normalizedLine;
+      const amountSegments = [];
+
+      while (true) {
+        const segmentMatch = remainingText.match(leadingAmountUnitPattern);
+
+        if (!segmentMatch) {
+          break;
+        }
+
+        const segmentUnit = normalizeUnit(segmentMatch[2]);
+
+        amountSegments.push({
+          amount: Number.parseFloat(segmentMatch[1].replace(",", ".")),
+          unit: segmentUnit
+        });
+
+        remainingText = remainingText.slice(segmentMatch[0].length);
+
+        if (!volumeUnits.includes(segmentUnit)) {
+          break;
+        }
+      }
+
+      if (
+        amountSegments.length >= 2 &&
+        amountSegments.every((segment) => volumeUnits.includes(segment.unit))
+      ) {
+        const totalTeaspoons = amountSegments.reduce(
+          (sum, segment) => sum + segment.amount * tspPerUnit[segment.unit],
+          0
+        );
+
+        return {
+          amount: totalTeaspoons,
+          unit: "tsp_total",
+          ingredient: cleanIngredientName(remainingText) || "ingredient"
+        };
+      }
+
+      const amountFirstPattern = new RegExp(
+        "^(\\d+(?:[.,]\\d+)?)\\s*(" +
+        supportedUnits +
+        ")\\b\\s*(?:of\\s+)?(.*)$",
+        "i"
+      );
+
+      const ingredientFirstPattern = new RegExp(
+        "^(.*?)\\s*(?:[-:–]\\s*)?" +
+        "(\\d+(?:[.,]\\d+)?)\\s*(" +
+        supportedUnits +
+        ")\\b\\s*$",
+        "i"
+      );
+
+      let match = normalizedLine.match(amountFirstPattern);
+
+      if (match) {
+        return {
+          amount: Number.parseFloat(match[1].replace(",", ".")),
+          unit: normalizeUnit(match[2]),
+          ingredient: cleanIngredientName(match[3]) || "ingredient"
+        };
+      }
+
+      match = normalizedLine.match(ingredientFirstPattern);
+
+      if (match) {
+        return {
+          ingredient: cleanIngredientName(match[1]) || "ingredient",
+          amount: Number.parseFloat(match[2].replace(",", ".")),
+          unit: normalizeUnit(match[3])
+        };
+      }
+
+      // No recognized unit — but if the line starts with a plain count
+      // (e.g. "2 large eggs", "1 lemon"), still resize the count.
+      const countPattern = /^(\d+(?:[.,]\d+)?)\s+(.+)$/;
+      match = normalizedLine.match(countPattern);
+
+      if (match) {
+        return {
+          amount: Number.parseFloat(match[1].replace(",", ".")),
+          unit: "count",
+          ingredient: cleanIngredientName(match[2]) || "ingredient"
+        };
+      }
+
+      // Ranges like "Zest of 1-2 lemons" or "2-3 cloves garlic" — scale
+      // both numbers in the range instead of leaving the whole line alone.
+      const rangeMatch = normalizedLine.match(
+        /^(.*?)(\d+(?:[.,]\d+)?)\s*[-–]\s*(\d+(?:[.,]\d+)?)\s*(.*)$/
+      );
+
+      if (rangeMatch) {
+        const [, prefix, lowText, highText, suffix] = rangeMatch;
+
+        const suffixUnitPattern = new RegExp(
+          "^\\s*(" + supportedUnits + ")\\b\\s*(?:of\\s+)?(.*)$", "i"
+        );
+        const suffixUnitMatch = suffix.match(suffixUnitPattern);
+
+        if (suffixUnitMatch) {
+          return {
+            isRange: true,
+            rangeLow: Number.parseFloat(lowText.replace(",", ".")),
+            rangeHigh: Number.parseFloat(highText.replace(",", ".")),
+            rangeUnit: normalizeUnit(suffixUnitMatch[1]),
+            prefix: prefix.trim(),
+            ingredient: cleanIngredientName(suffixUnitMatch[2]) || "ingredient"
+          };
+        }
+
+        return {
+          isRange: true,
+          rangeLow: Number.parseFloat(lowText.replace(",", ".")),
+          rangeHigh: Number.parseFloat(highText.replace(",", ".")),
+          rangeUnit: "count",
+          prefix: prefix.trim(),
+          suffixText: cleanIngredientName(suffix) || ""
+        };
+      }
+
+      return {
+        error: true,
+        originalLine: cleanedLine
+      };
+    }
+
+    // Converts a single amount + unit into display text. Shared by normal
+    // ingredient lines and by each side of a range (e.g. "1-2 lemons").
+    function convertAmountToText(unit, resizedAmount, ingredientName) {
+      switch (unit) {
+        case "g":
+          return weightToUS(resizedAmount, ingredientName);
+
+        case "kg":
+          return weightToUS(resizedAmount * 1000, ingredientName);
+
+        case "ml":
+          return { text: liquidToFriendlyUS(resizedAmount), approximate: false };
+
+        case "l":
+          return { text: liquidToFriendlyUS(resizedAmount * 1000), approximate: false };
+
+        // Already-US units: resize by the multiplier, then let cupsToFriendlyUS
+        // pick the best-fitting unit (cup/tbsp/tsp) — this is what makes
+        // something like 9 tsp automatically show up as 3 tbsp.
+        case "cup":
+          return { text: cupsToFriendlyUS(resizedAmount), approximate: false };
+
+        case "tbsp":
+          return { text: cupsToFriendlyUS(resizedAmount / 16), approximate: false };
+
+        case "tsp":
+          return { text: cupsToFriendlyUS(resizedAmount / 48), approximate: false };
+
+        // Combined total from a line that stacked two volume measurements
+        // together (e.g. "1 tbsp 2 tsp"), already expressed in teaspoons.
+        case "tsp_total":
+          return { text: cupsToFriendlyUS(resizedAmount / 48), approximate: false };
+
+        // oz input still gets recognized, but always reported back in pounds.
+        case "oz":
+          return { text: poundsToFriendly(resizedAmount / 16), approximate: true };
+
+        case "lb":
+          return { text: poundsToFriendly(resizedAmount), approximate: true };
+
+        case "count":
+          return { text: formatCount(resizedAmount), approximate: false };
+
+        default:
+          return {
+            text: `${formatNumber(resizedAmount)} ${unit}`,
+            approximate: false
+          };
+      }
+    }
+
+    function convertParsedIngredient(parsed, multiplier) {
+      if (parsed.isRange) {
+        const lowResult = convertAmountToText(
+          parsed.rangeUnit, parsed.rangeLow * multiplier, parsed.ingredient
+        );
+        const highResult = convertAmountToText(
+          parsed.rangeUnit, parsed.rangeHigh * multiplier, parsed.ingredient
+        );
+
+        const prefixPart = parsed.prefix ? `${parsed.prefix} ` : "";
+        const ingredientPart = parsed.rangeUnit === "count"
+          ? (parsed.suffixText ? ` ${parsed.suffixText}` : "")
+          : ` ${parsed.ingredient}`;
+
+        return {
+          text: `${prefixPart}${lowResult.text}-${highResult.text}${ingredientPart}`,
+          approximate: lowResult.approximate || highResult.approximate,
+          isFullLine: true
+        };
+      }
+
+      const resizedAmount = parsed.amount * multiplier;
+      return convertAmountToText(parsed.unit, resizedAmount, parsed.ingredient);
+    }
+
+    function convertRecipe() {
+      const multiplier = Number.parseFloat(multiplierInput.value);
+      const recipeText = recipeInput.value.trim();
+
+      conversionNote.hidden = true;
+      conversionNote.textContent = "";
+      resultOutput.value = "";
+
+      if (!Number.isFinite(multiplier) || multiplier < MIN_MULTIPLIER) {
+        resultOutput.value = `Enter a multiplier of at least ${MIN_MULTIPLIER}.`;
+        return;
+      }
+
+      if (!recipeText) {
+        resultOutput.value = "Paste a recipe before converting.";
+        return;
+      }
+
+      const lines = recipeText.split(/\r?\n/);
+      const convertedLines = [];
+      const unrecognizedLines = [];
+      let usedApproximateCupConversion = false;
+
+      for (const line of lines) {
+        if (!line.trim()) {
+          convertedLines.push("");
+          continue;
+        }
+
+        const parsed = parseRecipeLine(line);
+
+        if (!parsed) {
+          continue;
+        }
+
+        if (parsed.passthrough) {
+          convertedLines.push(parsed.originalLine);
+          continue;
+        }
+
+        if (parsed.error) {
+          convertedLines.push(parsed.originalLine);
+          unrecognizedLines.push(parsed.originalLine);
+          continue;
+        }
+
+        const converted = convertParsedIngredient(parsed, multiplier);
+
+        if (converted.approximate) {
+          usedApproximateCupConversion = true;
+        }
+
+        if (converted.isFullLine) {
+          convertedLines.push(converted.text);
+        } else {
+          convertedLines.push(`${converted.text} ${parsed.ingredient}`);
+        }
+      }
+
+      resultOutput.value = convertedLines.join("\n").trim();
+
+      const notes = [];
+
+      if (usedApproximateCupConversion) {
+        notes.push(
+          "Some measurements are rounded to the nearest amount you can actually measure (cup, tablespoon, teaspoon, or pound sizes), so they're close but approximate."
+        );
+      }
+
+      if (unrecognizedLines.length > 0) {
+        notes.push(
+          `${unrecognizedLines.length} line(s) could not be resized and were kept unchanged.`
+        );
+      }
+
+      if (notes.length > 0) {
+        conversionNote.textContent = notes.join(" ");
+        conversionNote.hidden = false;
+      }
+    }
+
+    function changeMultiplier(change) {
+      const currentValue =
+        Number.parseFloat(multiplierInput.value) || 1;
+
+      const newValue = Math.max(
+        0.5,
+        Math.round((currentValue + change) * 2) / 2
+      );
+
+      multiplierInput.value = newValue;
+    }
+
+    function clearCalculator() {
+      multiplierInput.value = "1";
+      recipeInput.value = "";
+      resultOutput.value = "";
+      conversionNote.hidden = true;
+      conversionNote.textContent = "";
+      recipeInput.focus();
+    }
+
+    async function copyResults() {
+      if (!resultOutput.value.trim()) {
+        alert("Convert a recipe before copying.");
+        return;
+      }
+
+      try {
+        await navigator.clipboard.writeText(resultOutput.value.trim());
+        copyButton.textContent = "Copied!";
+
+        setTimeout(() => {
+          copyButton.textContent = "Copy Converted Recipe";
+        }, 1500);
+      } catch {
+        resultOutput.focus();
+        resultOutput.select();
+        alert("The recipe is selected. Use Copy from your browser or keyboard.");
+      }
+    }
+
+    decreaseButton.addEventListener("click", () => {
+      changeMultiplier(-0.5);
+    });
+
+    increaseButton.addEventListener("click", () => {
+      changeMultiplier(0.5);
+    });
+
+    presetButtons.forEach((button) => {
+      button.addEventListener("click", () => {
+        multiplierInput.value = button.dataset.preset;
+      });
+    });
+
+    convertButton.addEventListener("click", convertRecipe);
+    clearButton.addEventListener("click", clearCalculator);
+    copyButton.addEventListener("click", copyResults);
+
+    recipeInput.addEventListener("keydown", (event) => {
+      if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+        convertRecipe();
+      }
+    });
+  </script>
+</body>
+</html>

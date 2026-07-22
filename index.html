@@ -359,20 +359,35 @@
     const copyButton = document.getElementById("copyButton");
     const presetButtons = document.querySelectorAll(".preset-button");
 
+    
     // Grows a textarea to fit its content so there's no inner scrollbar.
     function autoGrowTextarea(el) {
       el.style.height = "auto";
       el.style.height = `${el.scrollHeight}px`;
     }
 
-    // Keeps the pasted recipe (and last-used multiplier) across page
-    // refreshes using the browser's local storage.
-    const RECIPE_STORAGE_KEY = "kitchenCalRecipeText";
-    const MULTIPLIER_STORAGE_KEY = "kitchenCalMultiplier";
+    // Each numbered "slot" gets its own saved recipe + multiplier in local
+    // storage, so several tabs open at once (each on a different slot)
+    // don't overwrite each other. Which slot THIS tab is on lives in
+    // sessionStorage, since that's private to a single tab and doesn't leak
+    // across tabs the way localStorage does.
+    const CURRENT_SLOT_SESSION_KEY = "kitchenCalCurrentSlot";
+    const LEGACY_RECIPE_KEY = "kitchenCalRecipeText";
+    const LEGACY_MULTIPLIER_KEY = "kitchenCalMultiplier";
+
+    let currentSlot = 1;
+
+    function recipeKeyForSlot(slot) {
+      return `kitchenCalRecipeText_slot${slot}`;
+    }
+
+    function multiplierKeyForSlot(slot) {
+      return `kitchenCalMultiplier_slot${slot}`;
+    }
 
     function saveRecipeToStorage() {
       try {
-        localStorage.setItem(RECIPE_STORAGE_KEY, recipeInput.value);
+        localStorage.setItem(recipeKeyForSlot(currentSlot), recipeInput.value);
       } catch {
         // Storage can fail (private browsing, quota, etc.) — not critical.
       }
@@ -380,7 +395,7 @@
 
     function saveMultiplierToStorage() {
       try {
-        localStorage.setItem(MULTIPLIER_STORAGE_KEY, multiplierInput.value);
+        localStorage.setItem(multiplierKeyForSlot(currentSlot), multiplierInput.value);
       } catch {
         // Ignore storage failures.
       }
@@ -1157,8 +1172,8 @@
       autoGrowTextarea(resultOutput);
 
       try {
-        localStorage.removeItem(RECIPE_STORAGE_KEY);
-        localStorage.removeItem(MULTIPLIER_STORAGE_KEY);
+        localStorage.removeItem(recipeKeyForSlot(currentSlot));
+        localStorage.removeItem(multiplierKeyForSlot(currentSlot));
       } catch {
         // Ignore storage failures.
       }
@@ -1223,27 +1238,110 @@
       autoGrowTextarea(resultOutput);
     });
 
-    // Restore whatever was pasted (and the multiplier used) before the last
-    // refresh, and re-run the conversion so the output isn't left blank.
-    (function restoreSavedState() {
+    // Belt-and-suspenders saving: catch every signal a mobile browser might
+    // send when the app is about to close or get backgrounded, not just
+    // typing. Any one of these firing in time is enough to save the text.
+    function saveEverything() {
+      saveRecipeToStorage();
+      saveMultiplierToStorage();
+    }
+
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) {
+        saveEverything();
+      }
+    });
+
+    window.addEventListener("pagehide", saveEverything);
+    window.addEventListener("beforeunload", saveEverything);
+    recipeInput.addEventListener("blur", saveEverything);
+
+    // Extra safety net in case none of the above fire in time on a
+    // particular browser.
+    setInterval(saveEverything, 2000);
+
+    // Loads a slot's saved recipe + multiplier into the page and re-runs
+    // the conversion, or clears the page if that slot has nothing saved yet.
+    function loadSlot(slot) {
+      let savedRecipe = "";
+      let savedMultiplier = "1";
+
       try {
-        const savedRecipe = localStorage.getItem(RECIPE_STORAGE_KEY);
-        const savedMultiplier = localStorage.getItem(MULTIPLIER_STORAGE_KEY);
-
-        if (savedMultiplier) {
-          multiplierInput.value = savedMultiplier;
-        }
-
-        if (savedRecipe) {
-          recipeInput.value = savedRecipe;
-          convertRecipe();
-        }
+        savedRecipe = localStorage.getItem(recipeKeyForSlot(slot)) || "";
+        savedMultiplier = localStorage.getItem(multiplierKeyForSlot(slot)) || "1";
       } catch {
-        // Storage can be unavailable (private browsing, etc.) — just skip restoring.
+        // Storage can be unavailable (private browsing, etc.).
       }
 
+      multiplierInput.value = savedMultiplier;
+      recipeInput.value = savedRecipe;
       autoGrowTextarea(recipeInput);
-      autoGrowTextarea(resultOutput);
+
+      if (savedRecipe) {
+        convertRecipe();
+      } else {
+        resultOutput.value = "";
+        autoGrowTextarea(resultOutput);
+        conversionNote.hidden = true;
+        conversionNote.textContent = "";
+      }
+    }
+
+    // Picks the first slot (1-6) that doesn't already have a saved recipe,
+    // so a brand-new tab quietly gets its own space instead of overwriting
+    // one you're already using in another tab. If every slot is taken,
+    // falls back to slot 1.
+    function pickFreeSlot() {
+      try {
+        for (let slot = 1; slot <= 6; slot += 1) {
+          if (!localStorage.getItem(recipeKeyForSlot(slot))) {
+            return slot;
+          }
+        }
+      } catch {
+        // Storage can be unavailable (private browsing, etc.).
+      }
+
+      return 1;
+    }
+
+    // On load: a tab keeps using the same slot across its own refreshes
+    // (sessionStorage is private to a single tab), but a genuinely new tab
+    // silently claims a free slot so it won't collide with recipes open in
+    // other tabs. Also do a one-time migration of recipes saved before
+    // slots existed into slot 1.
+    (function restoreSavedState() {
+      try {
+        const legacyRecipe = localStorage.getItem(LEGACY_RECIPE_KEY);
+
+        if (legacyRecipe && !localStorage.getItem(recipeKeyForSlot(1))) {
+          localStorage.setItem(recipeKeyForSlot(1), legacyRecipe);
+
+          const legacyMultiplier = localStorage.getItem(LEGACY_MULTIPLIER_KEY);
+          if (legacyMultiplier) {
+            localStorage.setItem(multiplierKeyForSlot(1), legacyMultiplier);
+          }
+        }
+
+        localStorage.removeItem(LEGACY_RECIPE_KEY);
+        localStorage.removeItem(LEGACY_MULTIPLIER_KEY);
+
+        const savedSlot = Number.parseInt(
+          sessionStorage.getItem(CURRENT_SLOT_SESSION_KEY),
+          10
+        );
+
+        currentSlot = Number.isInteger(savedSlot) && savedSlot >= 1 && savedSlot <= 6
+          ? savedSlot
+          : pickFreeSlot();
+
+        sessionStorage.setItem(CURRENT_SLOT_SESSION_KEY, String(currentSlot));
+      } catch {
+        // Storage can be unavailable (private browsing, etc.) — default to slot 1.
+        currentSlot = 1;
+      }
+
+      loadSlot(currentSlot);
     })();
   </script>
 </body>

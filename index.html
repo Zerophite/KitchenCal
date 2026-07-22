@@ -434,6 +434,21 @@
       { names: ["chopped chocolate", "chocolate"], gramsPerCup: 170 },
       { names: ["chopped nuts", "walnuts", "pecans", "almonds", "nuts"], gramsPerCup: 120 },
 
+      { names: ["garlic powder"], gramsPerCup: 240 },
+      { names: ["onion powder"], gramsPerCup: 100 },
+      { names: ["ground ginger", "ginger powder"], gramsPerCup: 168 },
+      { names: ["black pepper", "ground black pepper", "pepper"], gramsPerCup: 120 },
+      { names: ["cayenne pepper", "cayenne"], gramsPerCup: 96 },
+      { names: ["chili powder"], gramsPerCup: 120 },
+      { names: ["paprika"], gramsPerCup: 120 },
+      { names: ["cumin"], gramsPerCup: 120 },
+
+      { names: ["ketchup"], gramsPerCup: 250 },
+      { names: ["yellow mustard", "mustard"], gramsPerCup: 240 },
+      { names: ["worcestershire sauce", "worcestershire"], gramsPerCup: 240 },
+      { names: ["hot sauce"], gramsPerCup: 213 },
+      { names: ["apple cider vinegar", "cider vinegar", "vinegar"], gramsPerCup: 213 },
+
       { names: ["grated ginger", "minced ginger", "fresh ginger", "ginger"], gramsPerCup: 96 },
       { names: ["grated garlic", "minced garlic", "garlic"], gramsPerCup: 144 },
 
@@ -697,8 +712,23 @@
         };
       }
 
-      // Unknown density: we can't convert to cups accurately, so fall back
-      // to pounds rather than ounces.
+      // Unknown density: most unlisted ingredients in a home recipe are a
+      // small amount of some spice, seasoning, or condiment, which reads
+      // far better as tsp/tbsp/cups — even approximated at roughly water's
+      // density — than as an obscure pound fraction, or worse "0 lb" for
+      // anything under about 25g (common for spices like cayenne). Reserve
+      // the pound fallback for bulkier amounts, where a cup measurement
+      // wouldn't be practical anyway.
+      const WATER_GRAMS_PER_CUP = 236.588;
+      const BULK_THRESHOLD_GRAMS = 200;
+
+      if (grams > 0 && grams < BULK_THRESHOLD_GRAMS) {
+        return {
+          text: cupsToFriendlyUS(grams / WATER_GRAMS_PER_CUP),
+          approximate: true
+        };
+      }
+
       return {
         text: poundsToFriendly(grams / 453.59237),
         approximate: true

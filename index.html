@@ -372,6 +372,7 @@
     // sessionStorage, since that's private to a single tab and doesn't leak
     // across tabs the way localStorage does.
     const CURRENT_SLOT_SESSION_KEY = "kitchenCalCurrentSlot";
+    const LAST_ACTIVE_SLOT_KEY = "kitchenCalLastActiveSlot";
     const LEGACY_RECIPE_KEY = "kitchenCalRecipeText";
     const LEGACY_MULTIPLIER_KEY = "kitchenCalMultiplier";
 
@@ -433,6 +434,9 @@
       { names: ["chopped chocolate", "chocolate"], gramsPerCup: 170 },
       { names: ["chopped nuts", "walnuts", "pecans", "almonds", "nuts"], gramsPerCup: 120 },
 
+      { names: ["grated ginger", "minced ginger", "fresh ginger", "ginger"], gramsPerCup: 96 },
+      { names: ["grated garlic", "minced garlic", "garlic"], gramsPerCup: 144 },
+
       { names: ["butter"], gramsPerCup: 227 },
       { names: ["shortening"], gramsPerCup: 205 },
       { names: ["cream cheese"], gramsPerCup: 227 },
@@ -458,7 +462,17 @@
     }
 
     function normalizeUnit(unit) {
-      const cleanedUnit = unit.toLowerCase().trim();
+      const cleanedUnit = unit.toLowerCase().trim().replace(/\s+/g, " ");
+
+      // Fluid ounces are a liquid volume measure, so they need their own
+      // unit key rather than falling in with weight ounces ("oz" -> lb).
+      if (
+        /^fl\.?\s?oz\.?$/.test(cleanedUnit) ||
+        /^fluid\s?ounces?$/.test(cleanedUnit) ||
+        cleanedUnit === "floz"
+      ) {
+        return "fl_oz";
+      }
 
       const unitMap = {
         g: "g",
@@ -815,10 +829,38 @@
         .trim();
     }
 
+    // Strips leading bullet/checkbox markers that come along when pasting
+    // from checklist apps (Apple Notes' "☐", Markdown "- [ ]" or "[x]",
+    // plain "-"/"•"/"*"), which otherwise get swallowed into the amount
+    // regex and make the whole line fail to parse. Loops because some
+    // sources stack more than one marker (e.g. "- ☐ item").
+    function stripLeadingMarkers(text) {
+      let result = text;
+      let previous;
+
+      do {
+        previous = result;
+
+        // Markdown-style checkbox brackets, e.g. "[ ]", "[x]", "[X]" — has
+        // to be handled explicitly because the letter x/X inside isn't
+        // punctuation/symbol and would otherwise stop the generic pattern
+        // below partway through.
+        result = result.replace(/^\[[ xX]?\]\s*/, "");
+
+        // Any other leading run of symbol/punctuation characters: bullets
+        // (-, •, *) and checkbox glyphs of any kind (☐, □, ▢, ✓, etc.).
+        // Deliberately not a fixed character list — different apps and
+        // websites paste checkboxes as different Unicode characters, and
+        // this covers all of them by category rather than guessing which
+        // exact glyph shows up.
+        result = result.replace(/^[\p{S}\p{P}\p{M}]+\s*/u, "");
+      } while (result !== previous);
+
+      return result;
+    }
+
     function parseRecipeLine(line) {
-      const cleanedLine = line
-        .trim()
-        .replace(/^[-•*]\s*/, "");
+      const cleanedLine = stripLeadingMarkers(line.trim());
 
       if (!cleanedLine) {
         return null;
@@ -843,6 +885,7 @@
         "ml|milliliter|milliliters|millilitre|millilitres|" +
         "l|liter|liters|litre|litres|" +
         "cups?|tbsps?|tablespoons?|tsps?|teaspoons?|" +
+        "fl\\.?\\s?oz\\.?|fluid\\s?ounces?|floz|" +
         "oz|ounces?|lbs?|pounds?";
 
       // If a line stacks two US-volume measurements together, like
@@ -1018,6 +1061,14 @@
         // together (e.g. "1 tbsp 2 tsp"), already expressed in teaspoons.
         case "tsp_total":
           return { text: cupsToFriendlyUS(resizedAmount / 48), approximate: false };
+
+        // Fluid ounces are a volume measure (unlike weight "oz"), so convert
+        // through milliliters into the same cup/tbsp/tsp ladder as ml/l.
+        case "fl_oz":
+          return {
+            text: liquidToFriendlyUS(resizedAmount * 29.5735295625),
+            approximate: false
+          };
 
         // oz input still gets recognized, but always reported back in pounds.
         case "oz":
@@ -1331,11 +1382,31 @@
           10
         );
 
-        currentSlot = Number.isInteger(savedSlot) && savedSlot >= 1 && savedSlot <= 6
-          ? savedSlot
-          : pickFreeSlot();
+        if (Number.isInteger(savedSlot) && savedSlot >= 1 && savedSlot <= 6) {
+          currentSlot = savedSlot;
+        } else {
+          // sessionStorage is private to a tab's lifetime, but iOS Safari
+          // (especially for home-screen/standalone apps) sometimes clears it
+          // when a backgrounded tab gets reloaded, even though the tab never
+          // actually closed. Without this fallback that looks exactly like a
+          // brand-new tab, so pickFreeSlot() would hand back an empty slot
+          // and the pasted recipe would appear to have vanished. Preferring
+          // whatever slot was last active fixes that for the common
+          // single-tab case, at the cost of weaker isolation between
+          // multiple simultaneously open tabs.
+          const lastActiveSlot = Number.parseInt(
+            localStorage.getItem(LAST_ACTIVE_SLOT_KEY),
+            10
+          );
+
+          currentSlot =
+            Number.isInteger(lastActiveSlot) && lastActiveSlot >= 1 && lastActiveSlot <= 6
+              ? lastActiveSlot
+              : pickFreeSlot();
+        }
 
         sessionStorage.setItem(CURRENT_SLOT_SESSION_KEY, String(currentSlot));
+        localStorage.setItem(LAST_ACTIVE_SLOT_KEY, String(currentSlot));
       } catch {
         // Storage can be unavailable (private browsing, etc.) — default to slot 1.
         currentSlot = 1;

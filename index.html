@@ -880,16 +880,36 @@
 
     function splitRunTogetherIngredients(text) {
       // When a recipe is pasted and its line breaks get lost, each new
-      // ingredient's leading quantity ends up jammed directly against the end
-      // of the previous ingredient's name with no space — e.g.
-      // "minced garlic1/2 medium onion" or "1/2 cup water3-4 tbsp sugar".
-      // In ordinary text a number is always separated from a word by a space,
-      // so a letter sitting immediately against a digit (or a fraction glyph
-      // like ½) is a reliable "a new ingredient starts here" marker. Splitting
-      // only on that no-space boundary handles amounts, counts, and ranges
-      // alike, while leaving already-spaced amounts (like "cut into 1 inch
-      // pieces") untouched.
-      return text.replace(/([A-Za-z])(\d|[¼½¾⅓⅔⅛⅜⅝⅞])/g, "$1\n$2");
+      // ingredient's leading quantity ends up jammed onto the end of the
+      // previous line. Safari collapses those newlines two different ways, so
+      // there are two boundary shapes to repair:
+      const UNIT =
+        "(?:cups?|tbsps?|tablespoons?|tsps?|teaspoons?|grams?|kgs?|" +
+        "kilograms?|milliliters?|millilitres?|liters?|litres?|ml|kg|" +
+        "fl\\.?\\s?oz\\.?|fluid\\s?ounces?|floz|ounces?|oz|lbs?|pounds?|g|l)";
+
+      // (a) No-space boundary — a letter sitting directly against a digit or
+      //     fraction glyph, e.g. "Apple2", "garlic1/2". In ordinary text a
+      //     number is always separated from a word by a space, so this is a
+      //     reliable "new ingredient starts here" marker and handles amounts,
+      //     counts, and ranges alike.
+      let out = text.replace(/([A-Za-z])(\d|[¼½¾⅓⅔⅛⅜⅝⅞])/g, "$1\n$2");
+
+      // (b) Spaced boundary — a word, a space, then a fresh amount + real unit
+      //     that is followed by yet more text, e.g. "...grated 1 teaspoon
+      //     minced ginger". Requiring an actual unit skips things like "cut
+      //     into 1 inch pieces"; requiring trailing text skips a line that
+      //     merely ends in an amount (ingredient-first like "chicken 2 lb").
+      const spaced = new RegExp(
+        "([A-Za-z,])\\s+(" +
+          "(?:\\d+(?:[.,]\\d+)?|[¼½¾⅓⅔⅛⅜⅝⅞])(?:\\s*/\\s*\\d+)?\\s*" +
+          UNIT +
+          "\\b)(?=\\s+\\S)",
+        "gi"
+      );
+      out = out.replace(spaced, "$1\n$2");
+
+      return out;
     }
 
     function parseRecipeLine(line) {

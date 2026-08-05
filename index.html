@@ -879,20 +879,17 @@
     }
 
     function splitRunTogetherIngredients(text) {
-      const units =
-        'cups?|tbsps?|tablespoons?|tsps?|teaspoons?|' +
-        'g\\b|grams?|kg|kgs?|ml|milliliters?|millilitres?|' +
-        'l\\b|liters?|litres?|' +
-        'fl\\.?\\s?oz\\.?|fluid\\s?ounces?|floz|' +
-        'oz|ounces?|lbs?|pounds?';
-
-      return text.replace(
-        new RegExp(
-          '([a-zA-Z])\\s*(\\d+(?:[.,]\\d+)?(?:\\s*/\\s*\\d+)?\\s*(?:' + units + '))\\b',
-          'gi'
-        ),
-        '$1\n$2'
-      );
+      // When a recipe is pasted and its line breaks get lost, each new
+      // ingredient's leading quantity ends up jammed directly against the end
+      // of the previous ingredient's name with no space — e.g.
+      // "minced garlic1/2 medium onion" or "1/2 cup water3-4 tbsp sugar".
+      // In ordinary text a number is always separated from a word by a space,
+      // so a letter sitting immediately against a digit (or a fraction glyph
+      // like ½) is a reliable "a new ingredient starts here" marker. Splitting
+      // only on that no-space boundary handles amounts, counts, and ranges
+      // alike, while leaving already-spaced amounts (like "cut into 1 inch
+      // pieces") untouched.
+      return text.replace(/([A-Za-z])(\d|[¼½¾⅓⅔⅛⅜⅝⅞])/g, "$1\n$2");
     }
 
     function parseRecipeLine(line) {

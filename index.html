@@ -1178,7 +1178,7 @@
           : ` ${parsed.ingredient}`;
 
         return {
-          text: `${prefixPart}${lowResult.text}-${highResult.text}${ingredientPart}`,
+          text: `${prefixPart}${lowResult.text} - ${highResult.text}${ingredientPart}`,
           approximate: lowResult.approximate || highResult.approximate,
           isFullLine: true
         };

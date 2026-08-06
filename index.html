@@ -881,33 +881,52 @@
     function splitRunTogetherIngredients(text) {
       // When a recipe is pasted and its line breaks get lost, each new
       // ingredient's leading quantity ends up jammed onto the end of the
-      // previous line. Safari collapses those newlines two different ways, so
-      // there are two boundary shapes to repair:
+      // previous line — sometimes with no space ("garlic1/2 medium onion"),
+      // sometimes with one ("garlic 1/2 medium onion"). These four rules
+      // repair every boundary shape seen in real pastes.
       const UNIT =
         "(?:cups?|tbsps?|tablespoons?|tsps?|teaspoons?|grams?|kgs?|" +
         "kilograms?|milliliters?|millilitres?|liters?|litres?|ml|kg|" +
         "fl\\.?\\s?oz\\.?|fluid\\s?ounces?|floz|ounces?|oz|lbs?|pounds?|g|l)";
+      const FRAC = "(?:\\d+\\s*\\/\\s*\\d+|[¼½¾⅓⅔⅛⅜⅝⅞])";
+      // Words that mark a number as a size/time, not a new ingredient amount.
+      const DIM =
+        "(?:inch|inches|in|cm|mm|ft|feet|foot|minutes?|mins?|hours?|hrs?|" +
+        "seconds?|secs?|degrees?|days?|weeks?)";
+
+      let out = text;
 
       // (a) No-space boundary — a letter sitting directly against a digit or
-      //     fraction glyph, e.g. "Apple2", "garlic1/2". In ordinary text a
-      //     number is always separated from a word by a space, so this is a
-      //     reliable "new ingredient starts here" marker and handles amounts,
-      //     counts, and ranges alike.
-      let out = text.replace(/([A-Za-z])(\d|[¼½¾⅓⅔⅛⅜⅝⅞])/g, "$1\n$2");
+      //     fraction glyph, e.g. "Apple2", "garlic1/2".
+      out = out.replace(/([A-Za-z])(\d|[¼½¾⅓⅔⅛⅜⅝⅞])/g, "$1\n$2");
 
-      // (b) Spaced boundary — a word, a space, then a fresh amount + real unit
-      //     that is followed by yet more text, e.g. "...grated 1 teaspoon
-      //     minced ginger". Requiring an actual unit skips things like "cut
-      //     into 1 inch pieces"; requiring trailing text skips a line that
-      //     merely ends in an amount (ingredient-first like "chicken 2 lb").
-      const spaced = new RegExp(
-        "([A-Za-z,])\\s+(" +
-          "(?:\\d+(?:[.,]\\d+)?|[¼½¾⅓⅔⅛⅜⅝⅞])(?:\\s*/\\s*\\d+)?\\s*" +
-          UNIT +
-          "\\b)(?=\\s+\\S)",
-        "gi"
+      // (b) Spaced amount + unit — "...grated 1 teaspoon minced ginger".
+      //     Requiring a real unit skips "cut into 1 inch pieces"; requiring
+      //     trailing text skips a line that merely ends in an amount
+      //     (ingredient-first like "chicken 2 lb").
+      out = out.replace(
+        new RegExp(
+          "([A-Za-z,])\\s+((?:\\d+(?:[.,]\\d+)?|[¼½¾⅓⅔⅛⅜⅝⅞])" +
+            "(?:\\s*\\/\\s*\\d+)?\\s*" + UNIT + "\\b)(?=\\s+\\S)",
+          "gi"
+        ),
+        "$1\n$2"
       );
-      out = out.replace(spaced, "$1\n$2");
+
+      // (c) Spaced range — "...water 3 -4 tablespoons sugar". A number range
+      //     mid-line almost always starts a new ingredient.
+      out = out.replace(
+        new RegExp("([A-Za-z,])\\s+(\\d+(?:[.,]\\d+)?\\s*[-–]\\s*\\d+)", "g"),
+        "$1\n$2"
+      );
+
+      // (d) Spaced bare fraction — "...garlic 1/2 medium onion". A lone
+      //     fraction mid-line is a new ingredient's amount, unless it's a size
+      //     like "1/2 inch".
+      out = out.replace(
+        new RegExp("([A-Za-z,])\\s+(" + FRAC + ")(?=\\s+(?!" + DIM + "\\b)\\S)", "gi"),
+        "$1\n$2"
+      );
 
       return out;
     }
@@ -931,7 +950,10 @@
         return { passthrough: true, originalLine: cleanedLine };
       }
 
-      const normalizedLine = normalizeFractionsInLine(cleanedLine);
+      // Tighten spaced number ranges ("3 -4", "3 - 4") into "3-4" so a range
+      // like "3 -4 tablespoons sugar" isn't mistaken for a plain count of "3".
+      const normalizedLine = normalizeFractionsInLine(cleanedLine)
+        .replace(/(\d)\s*[-–]\s*(\d)/g, "$1-$2");
 
       const supportedUnits =
         "g|gram|grams|kg|kgs|kilogram|kilograms|" +

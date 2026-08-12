@@ -442,6 +442,7 @@
       { names: ["paprika"], gramsPerCup: 120 },
       { names: ["cumin"], gramsPerCup: 120 },
 
+      { names: ["mayonnaise", "mayo"], gramsPerCup: 220 },
       { names: ["ketchup"], gramsPerCup: 250 },
       { names: ["yellow mustard", "mustard"], gramsPerCup: 240 },
       { names: ["worcestershire sauce", "worcestershire"], gramsPerCup: 240 },
@@ -457,6 +458,12 @@
       { names: ["peanut butter"], gramsPerCup: 258 },
       { names: ["yogurt", "yoghurt"], gramsPerCup: 245 },
       { names: ["sour cream"], gramsPerCup: 240 },
+
+      // Thin liquids weigh about the same as water (1 cup ~= 237 g), so their
+      // gram weights convert straight to cups instead of an awkward pound.
+      { names: ["milk", "buttermilk"], gramsPerCup: 242 },
+      { names: ["chicken stock", "vegetable stock", "beef stock", "stock", "broth"], gramsPerCup: 237 },
+      { names: ["water"], gramsPerCup: 237 },
 
       { names: ["honey"], gramsPerCup: 340 },
       { names: ["maple syrup"], gramsPerCup: 315 },
@@ -512,6 +519,13 @@
 
         cup: "cup",
         cups: "cup",
+
+        pint: "pint",
+        pints: "pint",
+        quart: "quart",
+        quarts: "quart",
+        gallon: "gallon",
+        gallons: "gallon",
 
         tbsp: "tbsp",
         tbsps: "tbsp",
@@ -827,10 +841,14 @@
         (match, whole, num, den) => String(Number(whole) + Number(num) / Number(den))
       );
 
-      // Standalone slash fraction: "3/4"
-      result = result.replace(
-        /(\d+)\/(\d+)/g,
-        (match, num, den) => String(Number(num) / Number(den))
+      // Standalone slash fraction like "3/4" — but only for the small
+      // denominators real recipes actually use. This leaves things like a
+      // "21/25" shrimp size grade alone instead of turning it into "0.84".
+      const cookingDenominators = [2, 3, 4, 5, 6, 8, 10, 12, 16];
+      result = result.replace(/(\d+)\/(\d+)/g, (match, num, den) =>
+        cookingDenominators.includes(Number(den))
+          ? String(Number(num) / Number(den))
+          : match
       );
 
       return result;
@@ -878,6 +896,36 @@
       return result;
     }
 
+    // Pasting a checklist often breaks a note like "(about 2/3 cup)" across
+    // two lines — "120 g (about" then "2/3 cup) coarse salt". Any line that
+    // opens a "(" without closing it is glued to the following lines until the
+    // parenthesis is balanced again, so each ingredient (and its note) ends up
+    // whole on one line.
+    function rejoinBrokenParentheses(text) {
+      const lines = text.split(/\r?\n/);
+      const out = [];
+      let buffer = "";
+
+      for (const line of lines) {
+        buffer = buffer ? `${buffer} ${line}` : line;
+        const opens = (buffer.match(/\(/g) || []).length;
+        const closes = (buffer.match(/\)/g) || []).length;
+
+        if (opens > closes) {
+          continue; // still inside an unclosed "(" — keep gluing.
+        }
+
+        out.push(buffer);
+        buffer = "";
+      }
+
+      if (buffer) {
+        out.push(buffer);
+      }
+
+      return out.join("\n");
+    }
+
     function splitRunTogetherIngredients(text) {
       // When a recipe is pasted and its line breaks get lost, each new
       // ingredient's leading quantity ends up jammed onto the end of the
@@ -885,16 +933,23 @@
       // sometimes with one ("garlic 1/2 medium onion"). These four rules
       // repair every boundary shape seen in real pastes.
       const UNIT =
-        "(?:cups?|tbsps?|tablespoons?|tsps?|teaspoons?|grams?|kgs?|" +
-        "kilograms?|milliliters?|millilitres?|liters?|litres?|ml|kg|" +
-        "fl\\.?\\s?oz\\.?|fluid\\s?ounces?|floz|ounces?|oz|lbs?|pounds?|g|l)";
+        "(?:cups?|pints?|quarts?|gallons?|tbsps?|tablespoons?|tsps?|" +
+        "teaspoons?|grams?|kgs?|kilograms?|milliliters?|millilitres?|" +
+        "liters?|litres?|ml|kg|fl\\.?\\s?oz\\.?|fluid\\s?ounces?|floz|" +
+        "ounces?|oz|lbs?|pounds?|g|l)";
       const FRAC = "(?:\\d+\\s*\\/\\s*\\d+|[¼½¾⅓⅔⅛⅜⅝⅞])";
       // Words that mark a number as a size/time, not a new ingredient amount.
       const DIM =
         "(?:inch|inches|in|cm|mm|ft|feet|foot|minutes?|mins?|hours?|hrs?|" +
         "seconds?|secs?|degrees?|days?|weeks?)";
 
-      let out = text;
+      // Protect the contents of any "(...)" note so the boundary rules below
+      // never split inside it (e.g. "(about 2/3 cup)" must stay intact).
+      const stash = [];
+      let out = text.replace(/\([^)]*\)/g, (match) => {
+        stash.push(match);
+        return `${stash.length - 1}`;
+      });
 
       // (a) No-space boundary — a letter sitting directly against a digit or
       //     fraction glyph, e.g. "Apple2", "garlic1/2".
@@ -927,6 +982,9 @@
         new RegExp("([A-Za-z,])\\s+(" + FRAC + ")(?=\\s+(?!" + DIM + "\\b)\\S)", "gi"),
         "$1\n$2"
       );
+
+      // Restore the protected parenthetical notes.
+      out = out.replace(/(\d+)/g, (match, index) => stash[Number(index)]);
 
       return out;
     }
@@ -1031,7 +1089,8 @@
         "g|gram|grams|kg|kgs|kilogram|kilograms|" +
         "ml|milliliter|milliliters|millilitre|millilitres|" +
         "l|liter|liters|litre|litres|" +
-        "cups?|tbsps?|tablespoons?|tsps?|teaspoons?|" +
+        "cups?|pints?|quarts?|gallons?|" +
+        "tbsps?|tablespoons?|tsps?|teaspoons?|" +
         "fl\\.?\\s?oz\\.?|fluid\\s?ounces?|floz|" +
         "oz|ounces?|lbs?|pounds?";
 
@@ -1198,6 +1257,17 @@
         case "cup":
           return { text: cupsToFriendlyUS(resizedAmount), approximate: false };
 
+        // Larger US volumes collapse into cups (1 pint = 2, 1 quart = 4,
+        // 1 gallon = 16) so a recipe never reports back in quarts or gallons.
+        case "pint":
+          return { text: cupsToFriendlyUS(resizedAmount * 2), approximate: false };
+
+        case "quart":
+          return { text: cupsToFriendlyUS(resizedAmount * 4), approximate: false };
+
+        case "gallon":
+          return { text: cupsToFriendlyUS(resizedAmount * 16), approximate: false };
+
         case "tbsp":
           return { text: cupsToFriendlyUS(resizedAmount / 16), approximate: false };
 
@@ -1283,7 +1353,9 @@
         return;
       }
 
-      const processedText = splitRunTogetherIngredients(recipeText);
+      const processedText = splitRunTogetherIngredients(
+        rejoinBrokenParentheses(recipeText)
+      );
       const lines = processedText.split(/\r?\n/);
       const convertedLines = [];
       const unrecognizedLines = [];
@@ -1432,7 +1504,9 @@
 
     recipeInput.addEventListener("paste", () => {
       setTimeout(() => {
-        recipeInput.value = splitRunTogetherIngredients(recipeInput.value);
+        recipeInput.value = splitRunTogetherIngredients(
+          rejoinBrokenParentheses(recipeInput.value)
+        );
         autoGrowTextarea(recipeInput);
         saveRecipeToStorage();
       }, 0);

@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta
     name="viewport"
-    content="width=device-width, initial-scale=1, viewport-fit=cover"
+    content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover"
   >
 
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -355,9 +355,8 @@
     <p class="note">
       Cup conversions for dry ingredients are approximate because every
       ingredient has a different density. Known ingredients convert to cups,
-      tablespoons, and teaspoons. Unknown ingredients fall back to pounds.
-      Ounces are never used — any ounce amounts in your input are reported
-      back in pounds instead.
+      tablespoons, and teaspoons. Bulky unknown ingredients fall back to
+      pounds. Ounces are converted the same way (never shown as ounces).
     </p>
   </main>
 
@@ -951,6 +950,14 @@
         return `${stash.length - 1}`;
       });
 
+      // Drop an "about"/"approx" sitting right before an amount so it can't get
+      // stranded on its own line when the rules below split ("about 2-3 cloves"
+      // -> "2-3 cloves").
+      out = out.replace(
+        /\b(?:about|approx\.?|approximately|roughly|around)\s+(?=\d|[¼½¾⅓⅔⅛⅜⅝⅞])/gi,
+        ""
+      );
+
       // (a) No-space boundary — a letter sitting directly against a digit or
       //     fraction glyph, e.g. "Apple2", "garlic1/2".
       out = out.replace(/([A-Za-z])(\d|[¼½¾⅓⅔⅛⅜⅝⅞])/g, "$1\n$2");
@@ -1027,16 +1034,23 @@
         return null;
       }
 
-      // Ingredient text outside the parentheses, with the leading metric weight
-      // and the parentheses removed.
-      const outside = line
-        .replace(/\([^)]*\)/g, " ")
-        .replace(
-          /^\s*\d+(?:[.,]\d+)?\s*(?:g|grams?|kg|kgs?|kilograms?|ml|milliliters?|millilitres?|l|liters?|litres?)\b\.?/i,
-          ""
-        )
-        .replace(/\s{2,}/g, " ")
-        .trim();
+      // Ingredient text outside the parentheses. Remove the parentheses, then
+      // peel off every leading "amount unit" measure — metric or US weight,
+      // including slash alternates like "150 g / 5 oz" — so only the actual
+      // ingredient name is left.
+      const leadingMeasure = new RegExp(
+        "^\\s*(?:/\\s*)?\\d+(?:[.,]\\d+)?(?:\\s*[-–]\\s*\\d+(?:[.,]\\d+)?)?\\s*" +
+          "(?:g|grams?|kg|kgs?|kilograms?|ml|milliliters?|millilitres?|l|liters?|" +
+          "litres?|lbs?|pounds?|oz|ounces?)\\b\\.?",
+        "i"
+      );
+      let outside = line.replace(/\([^)]*\)/g, " ");
+      let previousOutside;
+      do {
+        previousOutside = outside;
+        outside = outside.replace(leadingMeasure, "");
+      } while (outside !== previousOutside);
+      outside = outside.replace(/\s{2,}/g, " ").trim();
 
       // Combine, then collapse an immediately repeated word so
       // "1 large onion" + "onion, grated" reads as "1 large onion, grated".
@@ -1046,8 +1060,51 @@
         .replace(/\b(\w+)\s+\1\b/gi, "$1");
     }
 
+    // Recipe shorthand: a capital "T" after a number means tablespoon, a
+    // lowercase "t" means teaspoon (e.g. "2 T butter", "1 t salt"). Case
+    // matters, so this runs before anything lowercases the text. The "\b"
+    // keeps it from touching real words like "2 tomatoes" or "1 Tbsp".
+    function expandTeaspoonTablespoonShorthand(text) {
+      return text
+        .replace(/(\d)\s*T\b/g, "$1 tbsp")
+        .replace(/(\d)\s*t\b/g, "$1 tsp");
+    }
+
+    // Recipes often list an amount twice — metric then US — like
+    // "2.5 - 3 kg / 5-6 lb turkey" or "150 g / 5 oz (10 tbsp) butter". Keep the
+    // US side and drop the metric side, so the output uses the pounds/ounces
+    // the recipe already gave instead of re-deriving awkward fractions.
+    function preferGivenUsUnit(line) {
+      const amount = "\\d+(?:[.,]\\d+)?(?:\\s*[-–]\\s*\\d+(?:[.,]\\d+)?)?";
+      const metricUnit =
+        "(?:kg|kgs?|kilograms?|g|grams?|ml|milliliters?|millilitres?|l|liters?|litres?)";
+      const usUnit = "(?:lbs?|pounds?|oz|ounces?)";
+
+      // "metric / US" (e.g. "2.5-3 kg / 5-6 lb") -> keep the US side.
+      line = line.replace(
+        new RegExp(
+          "^" + amount + "\\s*" + metricUnit + "\\s*/\\s*(" + amount + "\\s*" + usUnit + ")\\b",
+          "i"
+        ),
+        "$1"
+      );
+
+      // "US / metric" (e.g. "8 oz / 227 g") -> keep the US side, drop metric.
+      line = line.replace(
+        new RegExp(
+          "^(" + amount + "\\s*" + usUnit + ")\\s*/\\s*" + amount + "\\s*" + metricUnit + "\\b",
+          "i"
+        ),
+        "$1"
+      );
+
+      return line;
+    }
+
     function parseRecipeLine(line) {
-      const cleanedLine = stripLeadingMarkers(line.trim());
+      const cleanedLine = preferGivenUsUnit(
+        expandTeaspoonTablespoonShorthand(stripLeadingMarkers(line.trim()))
+      );
 
       if (!cleanedLine) {
         return null;
@@ -1287,9 +1344,11 @@
             approximate: false
           };
 
-        // oz input still gets recognized, but always reported back in pounds.
+        // Ounces are never shown. Treat them as a weight (1 oz = 28.35 g) and
+        // run through the same logic as grams, so they come out as cups/tbsp/
+        // tsp for known ingredients (or pounds for a bulky unknown).
         case "oz":
-          return { text: poundsToFriendly(resizedAmount / 16), approximate: true };
+          return weightToUS(resizedAmount * 28.349523125, ingredientName);
 
         case "lb":
           return { text: poundsToFriendly(resizedAmount), approximate: true };

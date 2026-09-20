@@ -1042,7 +1042,7 @@
       // stranded on its own line when the rules below split ("about 2-3 cloves"
       // -> "2-3 cloves").
       out = out.replace(
-        /\b(?:about|approx\.?|approximately|roughly|around)\s+(?=\d|[¼½¾⅓⅔⅛⅜⅝⅞])/gi,
+        /\b(?:about|approx\.?|approximately|roughly|around)[^\S\r\n]+(?=\d|[¼½¾⅓⅔⅛⅜⅝⅞])/gi,
         ""
       );
 
@@ -1056,8 +1056,8 @@
       //     (ingredient-first like "chicken 2 lb").
       out = out.replace(
         new RegExp(
-          "([A-Za-z,])\\s+((?:\\d+(?:[.,]\\d+)?|[¼½¾⅓⅔⅛⅜⅝⅞])" +
-            "(?:\\s*\\/\\s*\\d+)?\\s*" + UNIT + "\\b)(?=\\s+\\S)",
+          "([A-Za-z,])[^\\S\\r\\n]+((?:\\d+(?:[.,]\\d+)?|[¼½¾⅓⅔⅛⅜⅝⅞])" +
+            "(?:\\s*\\/\\s*\\d+)?\\s*" + UNIT + "\\b)(?=[^\\S\\r\\n]+\\S)",
           "gi"
         ),
         "$1\n$2"
@@ -1066,7 +1066,7 @@
       // (c) Spaced range — "...water 3 -4 tablespoons sugar". A number range
       //     mid-line almost always starts a new ingredient.
       out = out.replace(
-        new RegExp("([A-Za-z,])\\s+(\\d+(?:[.,]\\d+)?\\s*[-–]\\s*\\d+)", "g"),
+        new RegExp("([A-Za-z,])[^\\S\\r\\n]+(\\d+(?:[.,]\\d+)?\\s*[-–]\\s*\\d+)", "g"),
         "$1\n$2"
       );
 
@@ -1074,7 +1074,7 @@
       //     fraction mid-line is a new ingredient's amount, unless it's a size
       //     like "1/2 inch".
       out = out.replace(
-        new RegExp("([A-Za-z,])\\s+(" + FRAC + ")(?=\\s+(?!" + DIM + "\\b)\\S)", "gi"),
+        new RegExp("([A-Za-z,])[^\\S\\r\\n]+(" + FRAC + ")(?=[^\\S\\r\\n]+(?!" + DIM + "\\b)\\S)", "gi"),
         "$1\n$2"
       );
 

@@ -9,9 +9,9 @@
 
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
-  <meta name="apple-mobile-web-app-title" content="Recipe Converter">
+  <meta name="apple-mobile-web-app-title" content="KitchenCal">
 
-  <title>Recipe Resize and US Converter</title>
+  <title>KitchenCal</title>
 
   <style>
     * {
@@ -230,17 +230,26 @@
       color: var(--text);
     }
 
-    .restore-banner {
-      padding: 12px 14px;
-      margin-bottom: 8px;
-      border: 1px dashed var(--border);
-      border-radius: 12px;
-      background: var(--result-bg);
-      cursor: pointer;
+    .recipe-label-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .recipe-label-row label {
+      margin: 17px 0 7px;
+    }
+
+    .paste-button {
+      width: auto;
+      min-height: 0;
+      padding: 8px 16px;
+      border-radius: 10px;
       font-size: 15px;
-      text-align: center;
+      background: var(--secondary);
       color: var(--primary);
-      font-weight: 600;
+      font-weight: 650;
     }
 
     .message {
@@ -291,11 +300,11 @@
 
 <body>
   <main class="app">
-    <h1>🍰 Recipe Converter</h1>
+    <h1>🔪 KitchenCal</h1>
 
     <p class="subtitle">
-      Paste a full metric recipe, resize it, and convert it into a US-style
-      recipe list.
+      Scale any recipe to the batch size you want and convert the measurements
+      to US cups, tablespoons, and teaspoons.
     </p>
 
     <label for="multiplier">Recipe multiplier</label>
@@ -353,10 +362,9 @@
       </span>
     </div>
 
-    <label for="recipeInput">Paste your recipe</label>
-
-    <div id="restoreBanner" class="restore-banner" hidden>
-      Tap to restore your previous recipe
+    <div class="recipe-label-row">
+      <label for="recipeInput">Paste your recipe</label>
+      <button id="pasteButton" class="paste-button" type="button">📋 Paste</button>
     </div>
 
     <textarea
@@ -400,10 +408,9 @@
     </section>
 
     <p class="note">
-      Cup conversions for dry ingredients are approximate because every
-      ingredient has a different density. Known ingredients convert to cups,
-      tablespoons, and teaspoons. Bulky unknown ingredients fall back to
-      pounds. Ounces are converted the same way (never shown as ounces).
+      Cup measurements are approximate, since every ingredient settles at a
+      different weight. Common ingredients are given in cups, tablespoons, and
+      teaspoons; larger unrecognized amounts are shown in pounds.
     </p>
   </main>
 
@@ -421,7 +428,7 @@
     const clearButton = document.getElementById("clearButton");
     const copyButton = document.getElementById("copyButton");
     const presetButtons = document.querySelectorAll(".preset-button");
-    const restoreBanner = document.getElementById("restoreBanner");
+    const pasteButton = document.getElementById("pasteButton");
     const scaleToRow = document.getElementById("scaleToRow");
     const scaleToName = document.getElementById("scaleToName");
     const scaleToInput = document.getElementById("scaleToInput");
@@ -1740,9 +1747,30 @@
     recipeInput.addEventListener("input", () => {
       autoGrowTextarea(recipeInput);
       saveRecipeToStorage();
-      restoreBanner.hidden = true;
       updateScaleToRow();
     });
+
+    // Read the clipboard straight into the recipe box and convert it.
+    async function pasteRecipe() {
+      try {
+        const text = await navigator.clipboard.readText();
+        if (!text || !text.trim()) {
+          return;
+        }
+        recipeInput.value = joinDanglingAmounts(
+          splitRunTogetherIngredients(rejoinBrokenParentheses(text))
+        );
+        autoGrowTextarea(recipeInput);
+        saveRecipeToStorage();
+        convertRecipe();
+      } catch {
+        // Clipboard access denied — let them paste by hand instead.
+        recipeInput.focus();
+        alert("Couldn't read the clipboard. Tap the box and paste manually.");
+      }
+    }
+
+    pasteButton.addEventListener("click", pasteRecipe);
 
     recipeInput.addEventListener("paste", () => {
       setTimeout(() => {
@@ -1791,44 +1819,23 @@
     // particular browser.
     setInterval(saveEverything, 2000);
 
-    restoreBanner.addEventListener("click", () => {
+    // Every tab (and every reload) opens fresh at multiplier 1 — a leftover
+    // multiplier from a recipe in another tab never carries over. Also clears
+    // saved recipe text and old slot-based keys from earlier versions.
+    (function initFreshState() {
       try {
-        const savedRecipe = localStorage.getItem(RECIPE_KEY) || "";
-        const savedMultiplier = localStorage.getItem(MULTIPLIER_KEY) || "1";
-        recipeInput.value = savedRecipe;
-        multiplierInput.value = savedMultiplier;
-        autoGrowTextarea(recipeInput);
-        restoreBanner.hidden = true;
-        if (savedRecipe) convertRecipe();
-      } catch {
-      }
-    });
-
-    (function restoreSavedState() {
-      try {
+        localStorage.removeItem(RECIPE_KEY);
+        localStorage.removeItem(MULTIPLIER_KEY);
         for (let slot = 1; slot <= 6; slot++) {
-          const oldKey = "kitchenCalRecipeText_slot" + slot;
-          const oldRecipe = localStorage.getItem(oldKey);
-          if (oldRecipe && !localStorage.getItem(RECIPE_KEY)) {
-            localStorage.setItem(RECIPE_KEY, oldRecipe);
-            const oldMult = localStorage.getItem("kitchenCalMultiplier_slot" + slot);
-            if (oldMult) localStorage.setItem(MULTIPLIER_KEY, oldMult);
-          }
-          localStorage.removeItem(oldKey);
+          localStorage.removeItem("kitchenCalRecipeText_slot" + slot);
           localStorage.removeItem("kitchenCalMultiplier_slot" + slot);
         }
         localStorage.removeItem("kitchenCalCurrentSlot");
         localStorage.removeItem("kitchenCalLastActiveSlot");
-
-        const savedRecipe = localStorage.getItem(RECIPE_KEY) || "";
-        if (savedRecipe) {
-          restoreBanner.hidden = false;
-        }
-
-        const savedMultiplier = localStorage.getItem(MULTIPLIER_KEY) || "1";
-        multiplierInput.value = savedMultiplier;
       } catch {
       }
+
+      multiplierInput.value = "1";
     })();
   </script>
 </body>

@@ -444,16 +444,19 @@
     const RECIPE_KEY = "kitchenCalRecipeText";
     const MULTIPLIER_KEY = "kitchenCalMultiplier";
 
+    // Persist to sessionStorage (not localStorage): it survives a refresh of
+    // THIS tab, yet a brand-new tab starts with an empty store — so a new tab
+    // opens fresh at x1 while a reload keeps your pasted, converted recipe.
     function saveRecipeToStorage() {
       try {
-        localStorage.setItem(RECIPE_KEY, recipeInput.value);
+        sessionStorage.setItem(RECIPE_KEY, recipeInput.value);
       } catch {
       }
     }
 
     function saveMultiplierToStorage() {
       try {
-        localStorage.setItem(MULTIPLIER_KEY, multiplierInput.value);
+        sessionStorage.setItem(MULTIPLIER_KEY, multiplierInput.value);
       } catch {
       }
     }
@@ -1690,8 +1693,8 @@
       autoGrowTextarea(resultOutput);
 
       try {
-        localStorage.removeItem(RECIPE_KEY);
-        localStorage.removeItem(MULTIPLIER_KEY);
+        sessionStorage.removeItem(RECIPE_KEY);
+        sessionStorage.removeItem(MULTIPLIER_KEY);
       } catch {
       }
 
@@ -1819,10 +1822,9 @@
     // particular browser.
     setInterval(saveEverything, 2000);
 
-    // Every tab (and every reload) opens fresh at multiplier 1 — a leftover
-    // multiplier from a recipe in another tab never carries over. Also clears
-    // saved recipe text and old slot-based keys from earlier versions.
-    (function initFreshState() {
+    (function restoreSession() {
+      // Clear any old localStorage-based persistence from earlier versions so a
+      // leftover recipe/multiplier never carries across tabs.
       try {
         localStorage.removeItem(RECIPE_KEY);
         localStorage.removeItem(MULTIPLIER_KEY);
@@ -1835,7 +1837,23 @@
       } catch {
       }
 
-      multiplierInput.value = "1";
+      // Restore this tab's recipe on a refresh. sessionStorage is empty in a
+      // brand-new tab, so new tabs still open fresh at multiplier 1.
+      let savedRecipe = "";
+      let savedMultiplier = "1";
+      try {
+        savedRecipe = sessionStorage.getItem(RECIPE_KEY) || "";
+        savedMultiplier = sessionStorage.getItem(MULTIPLIER_KEY) || "1";
+      } catch {
+      }
+
+      multiplierInput.value = savedMultiplier || "1";
+
+      if (savedRecipe) {
+        recipeInput.value = savedRecipe;
+        autoGrowTextarea(recipeInput);
+        convertRecipe();
+      }
     })();
   </script>
 </body>

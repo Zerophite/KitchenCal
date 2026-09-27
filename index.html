@@ -18,6 +18,12 @@
       box-sizing: border-box;
     }
 
+    /* Make the hidden attribute win over classes that set display (e.g. the
+       flex "Or make" row), so hidden elements actually stay hidden. */
+    [hidden] {
+      display: none !important;
+    }
+
     :root {
       color-scheme: light dark;
       --background: #f4f4f6;
@@ -252,6 +258,23 @@
       font-weight: 650;
     }
 
+    .paste-button:disabled {
+      opacity: 0.55;
+      cursor: default;
+    }
+
+    .recipe-actions {
+      display: flex;
+      gap: 8px;
+    }
+
+    .scan-status {
+      margin: 0 0 8px;
+      font-size: 14px;
+      line-height: 1.4;
+      color: var(--muted);
+    }
+
     .message {
       padding: 14px;
       margin-top: 12px;
@@ -363,9 +386,15 @@
     </div>
 
     <div class="recipe-label-row">
-      <label for="recipeInput">Paste your recipe</label>
-      <button id="pasteButton" class="paste-button" type="button">📋 Paste</button>
+      <label for="recipeInput">Your recipe</label>
+      <div class="recipe-actions">
+        <button id="scanButton" class="paste-button" type="button">📷 Scan</button>
+        <button id="pasteButton" class="paste-button" type="button">📋 Paste</button>
+      </div>
     </div>
+
+    <input id="scanInput" type="file" accept="image/*" hidden>
+    <p id="scanStatus" class="scan-status" hidden></p>
 
     <textarea
       id="recipeInput"
@@ -429,6 +458,9 @@
     const copyButton = document.getElementById("copyButton");
     const presetButtons = document.querySelectorAll(".preset-button");
     const pasteButton = document.getElementById("pasteButton");
+    const scanButton = document.getElementById("scanButton");
+    const scanInput = document.getElementById("scanInput");
+    const scanStatus = document.getElementById("scanStatus");
     const scaleToRow = document.getElementById("scaleToRow");
     const scaleToName = document.getElementById("scaleToName");
     const scaleToInput = document.getElementById("scaleToInput");
@@ -1771,6 +1803,7 @@
       conversionNote.textContent = "";
       scaleToRow.hidden = true;
       scaleToInput.value = "";
+      setScanStatus("");
       autoGrowTextarea(recipeInput);
       autoGrowTextarea(resultOutput);
 
@@ -1847,6 +1880,7 @@
         );
         autoGrowTextarea(recipeInput);
         saveRecipeToStorage();
+        setScanStatus("");
         convertRecipe();
       } catch {
         // Clipboard access denied — let them paste by hand instead.
@@ -1856,6 +1890,192 @@
     }
 
     pasteButton.addEventListener("click", pasteRecipe);
+
+    // ---- Scan a recipe from a photo ----
+    // Text recognition runs entirely on the phone (Tesseract.js) — the photo is
+    // never uploaded. The reader is a few MB, so it's only downloaded the first
+    // time Scan is used; the browser caches it after that.
+    // Pinned to v5: it returns per-line positions (data.lines) by default,
+    // which textFromScannedLines relies on.
+    const TESSERACT_URL =
+      "https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js";
+    let tesseractLoading = null;
+
+    function loadTesseract() {
+      if (window.Tesseract) {
+        return Promise.resolve(window.Tesseract);
+      }
+      if (!tesseractLoading) {
+        tesseractLoading = new Promise((resolve, reject) => {
+          const script = document.createElement("script");
+          script.src = TESSERACT_URL;
+          script.onload = () => resolve(window.Tesseract);
+          script.onerror = () => {
+            tesseractLoading = null;
+            reject(new Error("Couldn't load the text reader."));
+          };
+          document.head.appendChild(script);
+        });
+      }
+      return tesseractLoading;
+    }
+
+    // Phone photos are 12+ megapixels. Shrink to a size that still reads well
+    // without running Safari out of memory.
+    async function prepareImageForScan(file) {
+      const url = URL.createObjectURL(file);
+      try {
+        const img = await new Promise((resolve, reject) => {
+          const el = new Image();
+          el.onload = () => resolve(el);
+          el.onerror = () => reject(new Error("Couldn't open that image."));
+          el.src = url;
+        });
+        const MAX_SIDE = 2000;
+        const scale = Math.min(1, MAX_SIDE / Math.max(img.naturalWidth, img.naturalHeight));
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.round(img.naturalWidth * scale);
+        canvas.height = Math.round(img.naturalHeight * scale);
+        canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+        return canvas;
+      } finally {
+        URL.revokeObjectURL(url);
+      }
+    }
+
+    // Tidy the reader's output: fix the fraction slash, drop lines that are
+    // only stray specks or bullets, and keep at most one blank line between
+    // groups.
+    function cleanScannedText(raw) {
+      return raw
+        .replace(/\r/g, "")
+        .replace(/⁄/g, "/")
+        // The reader often drops the space in a mixed number: "1 1/2" comes
+        // back as "11/2" (which would mean 5 1/2). Recipes never write
+        // "eleven halves", so split it back apart. A size grade like "21/25"
+        // is left alone because its denominator isn't a cooking fraction.
+        .replace(/(^|[^\d/.])(\d)(\d)\/([2348])(?!\d)/g, (match, before, whole, num, den) =>
+          Number(num) > 0 && Number(num) < Number(den)
+            ? `${before}${whole} ${num}/${den}`
+            : match
+        )
+        .split("\n")
+        .map((line) => line.replace(/[ \t]+/g, " ").trim())
+        // Remove symbol-only lines outright (turning them blank would invent
+        // a group gap), but keep genuinely empty lines.
+        .filter((line) => line === "" || /[a-z0-9¼½¾⅓⅔⅛⅜⅝⅞]/i.test(line))
+        .join("\n")
+        .replace(/\n{3,}/g, "\n\n")
+        .trim();
+    }
+
+    // Rebuild the text from the reader's line positions. Its own "paragraph"
+    // breaks are unreliable (it puts blank lines between ordinary ingredient
+    // rows), so a blank line is only added where the vertical space between
+    // two rows is clearly bigger than usual — a real gap between groups.
+    function textFromScannedLines(scannedLines) {
+      const lines = scannedLines
+        .map((line) => ({
+          text: line.text.replace(/\s+/g, " ").trim(),
+          top: line.bbox.y0,
+          bottom: line.bbox.y1
+        }))
+        .filter((line) => line.text);
+
+      if (lines.length === 0) {
+        return "";
+      }
+
+      const median = (values) => {
+        const sorted = [...values].sort((a, b) => a - b);
+        return sorted[Math.floor(sorted.length / 2)];
+      };
+
+      const gaps = [];
+      for (let i = 1; i < lines.length; i += 1) {
+        gaps.push(lines[i].top - lines[i - 1].bottom);
+      }
+
+      const typicalGap = gaps.length > 0 ? median(gaps) : 0;
+      const typicalHeight = median(lines.map((line) => line.bottom - line.top));
+      const groupBreak = typicalGap + typicalHeight * 0.6;
+
+      const out = [lines[0].text];
+      for (let i = 1; i < lines.length; i += 1) {
+        if (gaps[i - 1] > groupBreak) {
+          out.push("");
+        }
+        out.push(lines[i].text);
+      }
+      return out.join("\n");
+    }
+
+    function setScanStatus(message) {
+      scanStatus.textContent = message;
+      scanStatus.hidden = !message;
+    }
+
+    async function scanRecipePhoto(file) {
+      scanButton.disabled = true;
+      setScanStatus("Getting the text reader ready… (the first scan takes a bit longer)");
+      let worker = null;
+
+      try {
+        const Tesseract = await loadTesseract();
+        const image = await prepareImageForScan(file);
+
+        worker = await Tesseract.createWorker("eng", 1, {
+          logger: (m) => {
+            if (m.status === "recognizing text") {
+              setScanStatus(`Reading your recipe… ${Math.round(m.progress * 100)}%`);
+            }
+          }
+        });
+
+        const { data } = await worker.recognize(image);
+        const text = cleanScannedText(
+          data.lines && data.lines.length > 0
+            ? textFromScannedLines(data.lines)
+            : data.text || ""
+        );
+
+        if (!text) {
+          setScanStatus("No text found. Try a closer, well-lit photo of just the ingredients.");
+          return;
+        }
+
+        recipeInput.value = joinDanglingAmounts(
+          splitRunTogetherIngredients(rejoinBrokenParentheses(text))
+        );
+        autoGrowTextarea(recipeInput);
+        saveRecipeToStorage();
+        updateScaleToRow();
+
+        // Any existing result belonged to the previous recipe.
+        resultOutput.value = "";
+        autoGrowTextarea(resultOutput);
+        conversionNote.hidden = true;
+
+        setScanStatus("Scanned. Check the amounts for misreads, then tap Convert Recipe.");
+      } catch {
+        setScanStatus("Couldn't read that photo. Check your connection and try again.");
+      } finally {
+        if (worker) {
+          worker.terminate();
+        }
+        scanButton.disabled = false;
+        scanInput.value = ""; // lets the same photo be picked again
+      }
+    }
+
+    scanButton.addEventListener("click", () => scanInput.click());
+
+    scanInput.addEventListener("change", () => {
+      const file = scanInput.files && scanInput.files[0];
+      if (file) {
+        scanRecipePhoto(file);
+      }
+    });
 
     recipeInput.addEventListener("paste", () => {
       setTimeout(() => {

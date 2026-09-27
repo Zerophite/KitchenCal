@@ -438,7 +438,17 @@
     // Grows a textarea to fit its content so there's no inner scrollbar.
     function autoGrowTextarea(el) {
       el.style.height = "auto";
-      el.style.height = `${el.scrollHeight}px`;
+      // If the page isn't laid out yet (e.g. mid-restore after iOS put the tab
+      // in the background), scrollHeight reads 0 — don't lock in a collapsed
+      // height; a later regrow will size it properly.
+      if (el.scrollHeight > 0) {
+        el.style.height = `${el.scrollHeight}px`;
+      }
+    }
+
+    function regrowTextareas() {
+      autoGrowTextarea(recipeInput);
+      autoGrowTextarea(resultOutput);
     }
 
     const RECIPE_KEY = "kitchenCalRecipeText";
@@ -930,10 +940,69 @@
         result = result.replace(trailingMetricWeight, "");
       } while (result !== previous);
 
-      return result
-        .replace(/\s{2,}/g, " ")
-        .replace(/[,;:\-–]+$/, "")
-        .trim();
+      return simplifyIngredientName(
+        result
+          .replace(/\s{2,}/g, " ")
+          .replace(/[,;:\-–]+$/, "")
+          .trim()
+      );
+    }
+
+    // Brand names add nothing when you're measuring
+    // ("King Arthur Unbleached All-Purpose Flour" -> "Unbleached All-Purpose Flour").
+    const BRAND_NAMES =
+      /\b(?:king arthur|bob'?s red mill|gold medal|pillsbury|domino|c&h|ghirardelli|nestl[eé]|toll house|hershey'?s|land o'?\s?lakes|kerrygold|nielsen[\s-]?massey|mccormick|diamond crystal|morton|red star|fleischmann'?s|clabber girl|philadelphia)\b/gi;
+
+    // Prep words that read naturally in front of the ingredient, so a trailing
+    // ", finely grated" becomes a leading "grated" ("grated carrots").
+    const MOVABLE_PREP = new Set([
+      "chopped", "grated", "minced", "sliced", "diced", "shredded", "crushed",
+      "melted", "softened", "toasted", "ground", "mashed", "beaten", "crumbled",
+      "cubed", "halved", "quartered", "sifted", "packed", "zested", "julienned"
+    ]);
+
+    // Adverbs dropped when a prep word moves ("finely grated" -> "grated").
+    const PREP_ADVERBS =
+      /^(?:very\s+)?(?:finely|roughly|coarsely|thinly|thickly|freshly|lightly|well|firmly|loosely|gently|fine)\s+/i;
+
+    // Trailing notes that don't change what you measure, so they're dropped
+    // (", at room temperature", ", divided", ", for dusting", ", to taste").
+    const DROPPABLE_NOTE =
+      /^(?:(?:at\s+)?room[\s-]?temp(?:erature)?|divided|optional|cold|warm|chilled|cool|lukewarm|hot|ice[\s-]?cold|drained|rinsed|peeled|(?:drained|rinsed) and (?:drained|rinsed)|(?:or more\s+)?to taste|as needed|if needed|plus more\b.*|for (?:dusting|serving|garnish|garnishing|frying|greasing|brushing|topping|sprinkling|decorating|the pan)\b.*)$/i;
+
+    // Shortens an ingredient name to what you actually need to know: removes
+    // brand names, moves a lone prep word to the front, and drops trailing
+    // notes. An unrecognized trailing note (e.g. "skin on, bone in") is kept,
+    // since it may matter for buying or cooking.
+    function simplifyIngredientName(name) {
+      const withoutBrand = name.replace(BRAND_NAMES, " ").replace(/\s{2,}/g, " ").trim();
+      // Never strip a name down to nothing (e.g. just "Philadelphia").
+      let result = /[a-z]/i.test(withoutBrand) ? withoutBrand : name;
+
+      const prefixes = [];
+      let match;
+      while ((match = result.match(/^(.*\S)\s*,\s*([^,]+)$/))) {
+        const clause = match[2].trim().replace(PREP_ADVERBS, "").toLowerCase();
+
+        if (MOVABLE_PREP.has(clause)) {
+          prefixes.unshift(clause);
+        } else if (!DROPPABLE_NOTE.test(clause)) {
+          break; // unknown note — keep it
+        }
+
+        result = match[1];
+      }
+
+      if (prefixes.length > 0) {
+        // Keep a size word first, the way recipes say it:
+        // "large onion" + "grated" -> "large grated onion".
+        const sized = result.match(/^((?:extra[\s-])?(?:small|medium|large)|jumbo|big)\s+(.+)$/i);
+        result = sized
+          ? `${sized[1]} ${prefixes.join(" ")} ${sized[2]}`
+          : `${prefixes.join(" ")} ${result}`;
+      }
+
+      return result.replace(/\s+,/g, ",").replace(/\s{2,}/g, " ").trim();
     }
 
     // Strips leading bullet/checkbox markers that come along when pasting
@@ -1593,6 +1662,8 @@
         splitRunTogetherIngredients(rejoinBrokenParentheses(recipeText))
       );
 
+      let firstScalable = null;
+
       for (const line of processed.split(/\r?\n/)) {
         if (!line.trim()) {
           continue;
@@ -1611,13 +1682,24 @@
         ) {
           continue;
         }
-        return {
+
+        const candidate = {
           amount: parsed.amount,
           unit: parsed.unit,
           ingredient: parsed.ingredient
         };
+
+        // For baking, flour is what you size a batch by — anchor on it
+        // whenever the recipe has any, even if it isn't listed first.
+        if (/flour/i.test(parsed.ingredient)) {
+          return candidate;
+        }
+
+        if (!firstScalable) {
+          firstScalable = candidate;
+        }
       }
-      return null;
+      return firstScalable;
     }
 
     function formatScaleValue(value) {
@@ -1795,9 +1877,14 @@
     // multiplier and re-converts, so there's no manual halving/doubling.
     scaleToInput.addEventListener("change", applyScaleTo);
 
-    window.addEventListener("resize", () => {
-      autoGrowTextarea(recipeInput);
-      autoGrowTextarea(resultOutput);
+    window.addEventListener("resize", regrowTextareas);
+
+    // Coming back to the tab (app switch, or iOS restoring it from the
+    // background) can leave the boxes sized for a stale layout, cutting off the
+    // converted list. Re-measure on return, and again once layout settles.
+    window.addEventListener("pageshow", () => {
+      regrowTextareas();
+      setTimeout(regrowTextareas, 300);
     });
 
     // Belt-and-suspenders saving: catch every signal a mobile browser might
@@ -1811,6 +1898,9 @@
     document.addEventListener("visibilitychange", () => {
       if (document.hidden) {
         saveEverything();
+      } else {
+        regrowTextareas();
+        setTimeout(regrowTextareas, 300);
       }
     });
 

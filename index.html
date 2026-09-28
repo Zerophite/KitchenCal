@@ -1920,8 +1920,60 @@
       return tesseractLoading;
     }
 
+    // Turns the photo into clean black text on white before reading. Each pixel
+    // is compared with the brightness of its own neighborhood (not one cutoff
+    // for the whole photo), so a shadow on one side and glare on the other
+    // don't wipe out the text. This fixed photos of screens in testing, where
+    // amounts like "1/2" were otherwise misread as "112".
+    function sharpenTextContrast(canvas) {
+      const ctx = canvas.getContext("2d", { willReadFrequently: true });
+      const width = canvas.width;
+      const height = canvas.height;
+      const image = ctx.getImageData(0, 0, width, height);
+      const px = image.data;
+
+      const gray = new Uint8ClampedArray(width * height);
+      for (let i = 0, j = 0; i < px.length; i += 4, j += 1) {
+        gray[j] = (px[i] * 77 + px[i + 1] * 150 + px[i + 2] * 29) >> 8;
+      }
+
+      // Running sums let each neighborhood's average be looked up instantly.
+      const stride = width + 1;
+      const sums = new Uint32Array(stride * (height + 1));
+      for (let y = 1; y <= height; y += 1) {
+        let row = 0;
+        for (let x = 1; x <= width; x += 1) {
+          row += gray[(y - 1) * width + (x - 1)];
+          sums[y * stride + x] = sums[(y - 1) * stride + x] + row;
+        }
+      }
+
+      const radius = Math.max(8, Math.round(Math.min(width, height) / 30));
+      const DARKER_BY = 0.22; // must be 22% darker than its surroundings to count as ink
+
+      for (let y = 0; y < height; y += 1) {
+        const y0 = Math.max(0, y - radius);
+        const y1 = Math.min(height - 1, y + radius);
+        for (let x = 0; x < width; x += 1) {
+          const x0 = Math.max(0, x - radius);
+          const x1 = Math.min(width - 1, x + radius);
+          const count = (x1 - x0 + 1) * (y1 - y0 + 1);
+          const sum =
+            sums[(y1 + 1) * stride + x1 + 1] - sums[y0 * stride + x1 + 1] -
+            sums[(y1 + 1) * stride + x0] + sums[y0 * stride + x0];
+          const value = gray[y * width + x] * count < sum * (1 - DARKER_BY) ? 0 : 255;
+          const k = (y * width + x) * 4;
+          px[k] = px[k + 1] = px[k + 2] = value;
+          px[k + 3] = 255;
+        }
+      }
+
+      ctx.putImageData(image, 0, 0);
+    }
+
     // Phone photos are 12+ megapixels. Shrink to a size that still reads well
-    // without running Safari out of memory.
+    // without running Safari out of memory, soften the screen-pixel grid
+    // (moiré) with a light blur, then boost the text contrast.
     async function prepareImageForScan(file) {
       const url = URL.createObjectURL(file);
       try {
@@ -1931,12 +1983,16 @@
           el.onerror = () => reject(new Error("Couldn't open that image."));
           el.src = url;
         });
-        const MAX_SIDE = 2000;
+        const MAX_SIDE = 2400;
         const scale = Math.min(1, MAX_SIDE / Math.max(img.naturalWidth, img.naturalHeight));
         const canvas = document.createElement("canvas");
         canvas.width = Math.round(img.naturalWidth * scale);
         canvas.height = Math.round(img.naturalHeight * scale);
-        canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+        const ctx = canvas.getContext("2d", { willReadFrequently: true });
+        ctx.filter = "blur(1.2px)"; // ignored on older iOS, which is fine
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        ctx.filter = "none";
+        sharpenTextContrast(canvas);
         return canvas;
       } finally {
         URL.revokeObjectURL(url);
@@ -1960,7 +2016,14 @@
             : match
         )
         .split("\n")
-        .map((line) => line.replace(/[ \t]+/g, " ").trim())
+        .map((line) =>
+          stripLeadingMarkers(line.replace(/[ \t]+/g, " ").trim())
+            // Put back a lost space between a number and its unit ("1tablespoon").
+            .replace(
+              /(\d)(?=(?:cups?|tablespoons?|teaspoons?|tbsps?|tsps?|pounds?|lbs?|ounces?|oz|kg|ml)\b)/gi,
+              "$1 "
+            )
+        )
         // Remove symbol-only lines outright (turning them blank would invent
         // a group gap), but keep genuinely empty lines.
         .filter((line) => line === "" || /[a-z0-9¼½¾⅓⅔⅛⅜⅝⅞]/i.test(line))
@@ -1978,7 +2041,9 @@
         .map((line) => ({
           text: line.text.replace(/\s+/g, " ").trim(),
           top: line.bbox.y0,
-          bottom: line.bbox.y1
+          bottom: line.bbox.y1,
+          left: line.bbox.x0,
+          right: line.bbox.x1
         }))
         .filter((line) => line.text);
 
@@ -2000,9 +2065,30 @@
       const typicalHeight = median(lines.map((line) => line.bottom - line.top));
       const groupBreak = typicalGap + typicalHeight * 0.6;
 
+      // A row counts as "full" if it runs to within 15% of the text's right edge.
+      const rightEdge = Math.max(...lines.map((line) => line.right));
+      const leftEdge = Math.min(...lines.map((line) => line.left));
+      const fullRow = rightEdge - (rightEdge - leftEdge) * 0.15;
+
       const out = [lines[0].text];
       for (let i = 1; i < lines.length; i += 1) {
-        if (gaps[i - 1] > groupBreak) {
+        const groupGap = gaps[i - 1] > groupBreak;
+
+        // Rejoin an ingredient that wrapped onto the next row ("...drumsticks,
+        // or" / "a combination"): the row above was full, and this row picks up
+        // mid-sentence in lowercase with no amount of its own near the start.
+        const wrappedContinuation =
+          !groupGap &&
+          lines[i - 1].right >= fullRow &&
+          /^[a-z]/.test(lines[i].text) &&
+          !/^.{0,6}[\d¼½¾⅓⅔⅛⅜⅝⅞]/.test(lines[i].text);
+
+        if (wrappedContinuation) {
+          out[out.length - 1] += ` ${lines[i].text}`;
+          continue;
+        }
+
+        if (groupGap) {
           out.push("");
         }
         out.push(lines[i].text);
@@ -2056,7 +2142,13 @@
         autoGrowTextarea(resultOutput);
         conversionNote.hidden = true;
 
-        setScanStatus("Scanned. Check the amounts for misreads, then tap Convert Recipe.");
+        // The reader's confidence was a reliable "this photo was tough" signal
+        // in testing (clear shots score ~90, glare/screen photos in the 70s).
+        setScanStatus(
+          data.confidence < 82
+            ? "Scanned, but this photo was hard to read. Check every amount carefully. A closer, straighter shot without glare works best."
+            : "Scanned. Check the amounts for misreads, then tap Convert Recipe."
+        );
       } catch {
         setScanStatus("Couldn't read that photo. Check your connection and try again.");
       } finally {

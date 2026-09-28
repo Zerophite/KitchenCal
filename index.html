@@ -745,7 +745,8 @@
 
         const remainderTsp = tspIntoCup - chosen.tsp;
         const totalCupsValue = wholeCups + chosen.tsp / 48;
-        const unitWord = totalCupsValue === 1 && remainderTsp === 0 ? "cup" : "cups";
+        // "cup" for 1 or less ("1/2 cup", "1 cup 2 tbsp"), "cups" above that.
+        const unitWord = totalCupsValue <= 1 ? "cup" : "cups";
 
         let cupLabel;
         if (wholeCups > 0 && chosen.label) {
@@ -999,8 +1000,10 @@
 
     // Trailing notes that don't change what you measure, so they're dropped
     // (", at room temperature", ", divided", ", for dusting", ", to taste").
+    // Also covers suggestions like ", preferably a Filipino brand like Silver
+    // Swan", ", such as vegetable" or ", see note 2".
     const DROPPABLE_NOTE =
-      /^(?:(?:at\s+)?room[\s-]?temp(?:erature)?|divided|optional|cold|warm|chilled|cool|lukewarm|hot|ice[\s-]?cold|drained|rinsed|peeled|(?:drained|rinsed) and (?:drained|rinsed)|(?:or more\s+)?to taste|as needed|if needed|plus more\b.*|for (?:dusting|serving|garnish|garnishing|frying|greasing|brushing|topping|sprinkling|decorating|the pan)\b.*)$/i;
+      /^(?:(?:at\s+)?room[\s-]?temp(?:erature)?|divided|optional|cold|warm|chilled|cool|lukewarm|hot|ice[\s-]?cold|drained|rinsed|peeled|(?:drained|rinsed) and (?:drained|rinsed)|(?:or more\s+)?to taste|as needed|if needed|plus more\b.*|for (?:dusting|serving|garnish|garnishing|frying|greasing|brushing|topping|sprinkling|decorating|the pan)\b.*|(?:preferably|ideally|such as|like|e\.?g\.?|see note|note)\b.*|or (?:your )?(?:favou?rite)\b.*)$/i;
 
     // Shortens an ingredient name to what you actually need to know: removes
     // brand names, moves a lone prep word to the front, and drops trailing
@@ -1009,7 +1012,10 @@
     function simplifyIngredientName(name) {
       const withoutBrand = name.replace(BRAND_NAMES, " ").replace(/\s{2,}/g, " ").trim();
       // Never strip a name down to nothing (e.g. just "Philadelphia").
-      let result = /[a-z]/i.test(withoutBrand) ? withoutBrand : name;
+      let result = (/[a-z]/i.test(withoutBrand) ? withoutBrand : name)
+        // A suggestion with its comma lost ("soy sauce preferably a Filipino
+        // brand") is dropped too; the comma'd form is handled below.
+        .replace(/\s*,?\s+(?:preferably|ideally|such as)\b.*$/i, "");
 
       const prefixes = [];
       let match;
@@ -1058,30 +1064,26 @@
     }
 
     // Pasting a checklist often breaks a note like "(about 2/3 cup)" across
-    // two lines — "120 g (about" then "2/3 cup) coarse salt". Any line that
-    // opens a "(" without closing it is glued to the following lines until the
-    // parenthesis is balanced again, so each ingredient (and its note) ends up
-    // whole on one line.
+    // two lines — "120 g (about" then "2/3 cup) coarse salt". A line that opens
+    // a "(" without closing it is glued to the NEXT line only, and only when
+    // that line actually closes the note. A "(" that never closes (e.g. a
+    // photo that cut off "(See Note 2)") must not swallow the rest of the recipe.
     function rejoinBrokenParentheses(text) {
       const lines = text.split(/\r?\n/);
       const out = [];
-      let buffer = "";
 
-      for (const line of lines) {
-        buffer = buffer ? `${buffer} ${line}` : line;
-        const opens = (buffer.match(/\(/g) || []).length;
-        const closes = (buffer.match(/\)/g) || []).length;
+      for (let i = 0; i < lines.length; i += 1) {
+        const line = lines[i];
+        const next = lines[i + 1];
+        const unclosed =
+          (line.match(/\(/g) || []).length > (line.match(/\)/g) || []).length;
 
-        if (opens > closes) {
-          continue; // still inside an unclosed "(" — keep gluing.
+        if (unclosed && next !== undefined && /^[^(]*\)/.test(next)) {
+          out.push(`${line} ${next}`);
+          i += 1; // the next line was consumed
+        } else {
+          out.push(line);
         }
-
-        out.push(buffer);
-        buffer = "";
-      }
-
-      if (buffer) {
-        out.push(buffer);
       }
 
       return out.join("\n");
@@ -1141,6 +1143,11 @@
         stash.push(match);
         return `${stash.length - 1}`;
       });
+
+      // "4 x 150g fish fillets" means four 150g fillets. Turn the "x" into a
+      // real multiplication sign so the rules below don't treat "x" as the end
+      // of one ingredient and "150g" as the start of the next.
+      out = out.replace(/(\d)\s*[xX×]\s*(?=\d)/g, "$1 × ");
 
       // Drop an "about"/"approx" sitting right before an amount so it can't get
       // stranded on its own line when the rules below split ("about 2-3 cloves"
@@ -1262,20 +1269,99 @@
         .replace(/(\d)\s*t\b/g, "$1 tsp");
     }
 
+    // Units that can end up glued to the word after them when spaces get lost
+    // ("2cupswater", "1tspsalt"). Plural form first, then singular.
+    const GLUED_UNITS = [
+      ["tablespoons", "tablespoon"], ["teaspoons", "teaspoon"], ["tbsps", "tbsp"],
+      ["tsps", "tsp"], ["cups", "cup"], ["pounds", "pound"], ["lbs", "lb"],
+      ["ounces", "ounce"], ["grams", "gram"], ["kg"], ["ml"], ["oz"]
+    ];
+
+    // Everyday words that follow a unit. Used to tell "cups|water" from
+    // "cup|sugar" when un-gluing, and to leave words like "cupcake" alone.
+    const COMMON_INGREDIENT_WORDS = new Set([
+      "water", "milk", "buttermilk", "salt", "sugar", "flour", "butter", "oil", "olive",
+      "egg", "eggs", "garlic", "onion", "onions", "pepper", "vinegar", "sauce", "soy",
+      "honey", "cream", "cheese", "rice", "broth", "stock", "juice", "lemon", "lime",
+      "vanilla", "cinnamon", "fresh", "ground", "dried", "chopped", "minced", "grated",
+      "sliced", "diced", "kosher", "sea", "heavy", "whole", "unsalted", "salted", "cold",
+      "warm", "hot", "brown", "white", "granulated", "powdered", "all", "packed", "raw",
+      "chicken", "beef", "pork", "tomato", "tomatoes", "potatoes", "carrots", "celery",
+      "parsley", "basil", "oregano", "thyme", "rosemary", "ginger", "paprika", "cumin",
+      "wine", "coconut", "almond", "oats", "chocolate", "cocoa", "yogurt", "mayonnaise",
+      "baking", "yeast", "maple", "molasses", "nuts", "walnuts", "pecans", "raisins"
+    ]);
+
+    // Puts back spaces lost around a leading amount: "2cupswater" -> "2 cups
+    // water", "1tspsalt" -> "1 tsp salt", "2,cups water" -> "2 cups water".
+    // With a space after the number ("1 cupcake mix"), only splits when that
+    // leaves a known ingredient word, so real words aren't chopped up.
+    function repairGluedAmount(line) {
+      const text = line.replace(
+        /^(\d+(?:[.,]\d+)?(?:\s+\d+\/\d+)?|\d+\/\d+),\s*(?=[a-z])/i,
+        "$1 "
+      );
+
+      const amountMatch = text.match(
+        /^(\d+(?:[.,]\d+)?(?:\s+\d+\/\d+)?|\d+\/\d+|\d*[¼½¾⅓⅔⅛⅜⅝⅞])(\s*)/
+      );
+      if (!amountMatch) {
+        return text;
+      }
+
+      const amountText = amountMatch[1];
+      const hasGap = amountMatch[2].length > 0;
+      const rest = text.slice(amountMatch[0].length);
+      const amount = Number.parseFloat(normalizeFractionsInLine(amountText).replace(",", "."));
+
+      for (const forms of GLUED_UNITS) {
+        const candidates = forms
+          .filter((unit) =>
+            rest.toLowerCase().startsWith(unit) && /^[a-z]/i.test(rest.slice(unit.length))
+          )
+          .map((unit) => ({
+            unit,
+            word: rest.slice(unit.length).match(/^[a-z]+/i)[0].toLowerCase()
+          }));
+
+        if (candidates.length === 0) {
+          continue;
+        }
+
+        let choice = candidates.find((c) => COMMON_INGREDIENT_WORDS.has(c.word));
+        if (!choice) {
+          if (hasGap) {
+            return text; // e.g. "1 cupcake mix" — a real word, not a glued unit
+          }
+          choice = amount > 1 ? candidates[0] : candidates[candidates.length - 1];
+        }
+
+        const unitText = rest.slice(0, choice.unit.length);
+        return `${amountText} ${unitText} ${rest.slice(choice.unit.length)}`;
+      }
+
+      return text;
+    }
+
     // Recipes often list an amount twice — metric then US — like
-    // "2.5 - 3 kg / 5-6 lb turkey" or "150 g / 5 oz (10 tbsp) butter". Keep the
-    // US side and drop the metric side, so the output uses the pounds/ounces
-    // the recipe already gave instead of re-deriving awkward fractions.
+    // "2.5 - 3 kg / 5-6 lb turkey", "150 g / 5 oz (10 tbsp) butter" or
+    // "50g / 4 tbsp butter". Keep the US side and drop the metric side, so the
+    // output uses the amount the recipe already gave instead of re-deriving
+    // awkward fractions.
     function preferGivenUsUnit(line) {
       const amount = "\\d+(?:[.,]\\d+)?(?:\\s*[-–]\\s*\\d+(?:[.,]\\d+)?)?";
+      // US amounts may also be fractions: "1/4 cup", "1 1/2 tbsp", "¾ cup".
+      const usAmount =
+        "(?:\\d+\\s+\\d+\\/\\d+|\\d+\\/\\d+|\\d*\\s*[¼½¾⅓⅔⅛⅜⅝⅞]|" + amount + ")";
       const metricUnit =
         "(?:kg|kgs?|kilograms?|g|grams?|ml|milliliters?|millilitres?|l|liters?|litres?)";
-      const usUnit = "(?:lbs?|pounds?|oz|ounces?)";
+      const usUnit =
+        "(?:lbs?|pounds?|oz|ounces?|cups?|tbsps?|tablespoons?|tsps?|teaspoons?)";
 
-      // "metric / US" (e.g. "2.5-3 kg / 5-6 lb") -> keep the US side.
+      // "metric / US" (e.g. "2.5-3 kg / 5-6 lb", "50g / 4 tbsp") -> keep the US side.
       line = line.replace(
         new RegExp(
-          "^" + amount + "\\s*" + metricUnit + "\\s*/\\s*(" + amount + "\\s*" + usUnit + ")\\b",
+          "^" + amount + "\\s*" + metricUnit + "\\s*/\\s*(" + usAmount + "\\s*" + usUnit + ")\\b",
           "i"
         ),
         "$1"
@@ -1284,7 +1370,7 @@
       // "US / metric" (e.g. "8 oz / 227 g") -> keep the US side, drop metric.
       line = line.replace(
         new RegExp(
-          "^(" + amount + "\\s*" + usUnit + ")\\s*/\\s*" + amount + "\\s*" + metricUnit + "\\b",
+          "^(" + usAmount + "\\s*" + usUnit + ")\\s*/\\s*" + amount + "\\s*" + metricUnit + "\\b",
           "i"
         ),
         "$1"
@@ -1295,7 +1381,9 @@
 
     function parseRecipeLine(line) {
       const cleanedLine = preferGivenUsUnit(
-        expandTeaspoonTablespoonShorthand(stripLeadingMarkers(line.trim()))
+        repairGluedAmount(
+          expandTeaspoonTablespoonShorthand(stripLeadingMarkers(line.trim()))
+        )
       );
 
       if (!cleanedLine) {
@@ -1920,11 +2008,12 @@
       return tesseractLoading;
     }
 
-    // Turns the photo into clean black text on white before reading. Each pixel
-    // is compared with the brightness of its own neighborhood (not one cutoff
-    // for the whole photo), so a shadow on one side and glare on the other
-    // don't wipe out the text. This fixed photos of screens in testing, where
-    // amounts like "1/2" were otherwise misread as "112".
+    // Turns the photo into clean black text on white before reading. Each spot
+    // is lightly blurred (averaged over a 5x5 patch, which smooths away a
+    // screen's moiré stripes) and then compared with the brightness of its own
+    // neighborhood rather than one cutoff for the whole photo, so a shadow on
+    // one side and glare on the other don't wipe out the text. The blur is done
+    // here in code because older iPhones ignore the canvas blur filter.
     function sharpenTextContrast(canvas) {
       const ctx = canvas.getContext("2d", { willReadFrequently: true });
       const width = canvas.width;
@@ -1948,20 +2037,31 @@
         }
       }
 
+      const areaSum = (x0, y0, x1, y1) =>
+        sums[(y1 + 1) * stride + x1 + 1] - sums[y0 * stride + x1 + 1] -
+        sums[(y1 + 1) * stride + x0] + sums[y0 * stride + x0];
+
+      const BLUR = 2; // 5x5 patch
       const radius = Math.max(8, Math.round(Math.min(width, height) / 30));
       const DARKER_BY = 0.22; // must be 22% darker than its surroundings to count as ink
 
       for (let y = 0; y < height; y += 1) {
-        const y0 = Math.max(0, y - radius);
-        const y1 = Math.min(height - 1, y + radius);
+        const ny0 = Math.max(0, y - radius);
+        const ny1 = Math.min(height - 1, y + radius);
+        const by0 = Math.max(0, y - BLUR);
+        const by1 = Math.min(height - 1, y + BLUR);
         for (let x = 0; x < width; x += 1) {
-          const x0 = Math.max(0, x - radius);
-          const x1 = Math.min(width - 1, x + radius);
-          const count = (x1 - x0 + 1) * (y1 - y0 + 1);
-          const sum =
-            sums[(y1 + 1) * stride + x1 + 1] - sums[y0 * stride + x1 + 1] -
-            sums[(y1 + 1) * stride + x0] + sums[y0 * stride + x0];
-          const value = gray[y * width + x] * count < sum * (1 - DARKER_BY) ? 0 : 255;
+          const nx0 = Math.max(0, x - radius);
+          const nx1 = Math.min(width - 1, x + radius);
+          const bx0 = Math.max(0, x - BLUR);
+          const bx1 = Math.min(width - 1, x + BLUR);
+          const neighborhoodCount = (nx1 - nx0 + 1) * (ny1 - ny0 + 1);
+          const patchCount = (bx1 - bx0 + 1) * (by1 - by0 + 1);
+          // patch average < neighborhood average * (1 - DARKER_BY), cross-multiplied
+          const isInk =
+            areaSum(bx0, by0, bx1, by1) * neighborhoodCount <
+            areaSum(nx0, ny0, nx1, ny1) * patchCount * (1 - DARKER_BY);
+          const value = isInk ? 0 : 255;
           const k = (y * width + x) * 4;
           px[k] = px[k + 1] = px[k + 2] = value;
           px[k + 3] = 255;
@@ -1971,9 +2071,11 @@
       ctx.putImageData(image, 0, 0);
     }
 
-    // Phone photos are 12+ megapixels. Shrink to a size that still reads well
-    // without running Safari out of memory, soften the screen-pixel grid
-    // (moiré) with a light blur, then boost the text contrast.
+    // Phone photos are 12+ megapixels. Shrink to about 2000px, then boost the
+    // text contrast. Shrinking happens in halves: one big jump (4032 -> 2000)
+    // skips pixels and keeps a screen's moiré stripes razor-sharp, while
+    // halving averages each 2x2 block and smooths them away. In testing, a
+    // one-jump shrink turned a laptop-screen photo into gibberish.
     async function prepareImageForScan(file) {
       const url = URL.createObjectURL(file);
       try {
@@ -1983,15 +2085,33 @@
           el.onerror = () => reject(new Error("Couldn't open that image."));
           el.src = url;
         });
-        const MAX_SIDE = 2400;
+
+        const MAX_SIDE = 2000;
         const scale = Math.min(1, MAX_SIDE / Math.max(img.naturalWidth, img.naturalHeight));
+        const targetWidth = Math.round(img.naturalWidth * scale);
+        const targetHeight = Math.round(img.naturalHeight * scale);
+
+        let source = img;
+        let width = img.naturalWidth;
+        let height = img.naturalHeight;
+        while (width / 2 >= targetWidth) {
+          const half = document.createElement("canvas");
+          half.width = Math.round(width / 2);
+          half.height = Math.round(height / 2);
+          const halfCtx = half.getContext("2d");
+          halfCtx.imageSmoothingQuality = "high";
+          halfCtx.drawImage(source, 0, 0, half.width, half.height);
+          source = half;
+          width = half.width;
+          height = half.height;
+        }
+
         const canvas = document.createElement("canvas");
-        canvas.width = Math.round(img.naturalWidth * scale);
-        canvas.height = Math.round(img.naturalHeight * scale);
+        canvas.width = targetWidth;
+        canvas.height = targetHeight;
         const ctx = canvas.getContext("2d", { willReadFrequently: true });
-        ctx.filter = "blur(1.2px)"; // ignored on older iOS, which is fine
-        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-        ctx.filter = "none";
+        ctx.imageSmoothingQuality = "high";
+        ctx.drawImage(source, 0, 0, targetWidth, targetHeight);
         sharpenTextContrast(canvas);
         return canvas;
       } finally {
@@ -2003,7 +2123,7 @@
     // only stray specks or bullets, and keep at most one blank line between
     // groups.
     function cleanScannedText(raw) {
-      return raw
+      const lines = raw
         .replace(/\r/g, "")
         .replace(/⁄/g, "/")
         // The reader often drops the space in a mixed number: "1 1/2" comes
@@ -2015,21 +2135,66 @@
             ? `${before}${whole} ${num}/${den}`
             : match
         )
+        // The reader often sees "g" as "9". Right before a US alternative
+        // ("50g / 4 tbsp", "180g / 6 oz") it can only be grams, so put it back:
+        // "509 / 4 tbsp" -> "50g / 4 tbsp".
+        .replace(
+          /\b(\d{1,4})9(\s*\/\s*)(?=\d[\d.\/\s–-]*\s*(?:oz|ounces?|lbs?|pounds?|cups?|tbsps?|tsps?|tablespoons?|teaspoons?)\b)/gi,
+          "$1g$2"
+        )
         .split("\n")
         .map((line) =>
           stripLeadingMarkers(line.replace(/[ \t]+/g, " ").trim())
+            // A page's checkbox can be read as a "1" in front of the amount:
+            // "1 1 1/2 tbsp" is never a real amount, so drop the stray digit.
+            .replace(/^\d\s+(?=\d+\s+\d\/\d)/, "")
             // Put back a lost space between a number and its unit ("1tablespoon").
             .replace(
               /(\d)(?=(?:cups?|tablespoons?|teaspoons?|tbsps?|tsps?|pounds?|lbs?|ounces?|oz|kg|ml)\b)/gi,
               "$1 "
             )
         )
+        // ...and around a unit glued to its ingredient ("2cupswater").
+        .map(repairGluedAmount)
         // Remove symbol-only lines outright (turning them blank would invent
         // a group gap), but keep genuinely empty lines.
         .filter((line) => line === "" || /[a-z0-9¼½¾⅓⅔⅛⅜⅝⅞]/i.test(line))
+        // Drop a recipe site's "Cups | Metric" / "US Customary" unit switch.
+        .filter(
+          (line) =>
+            !/\b(?:metric|customary)\b/i.test(line) ||
+            line.replace(/[^a-z\s]/gi, " ").trim().split(/\s+/).length > 3
+        );
+
+      return lines
         .join("\n")
         .replace(/\n{3,}/g, "\n\n")
         .trim();
+    }
+
+    // A photo of a whole recipe page also picks up the title, cook time,
+    // buttons, instructions and more. When there's an "Ingredients" heading,
+    // keep only what's after it, up to an "Instructions"/"Method" heading or
+    // the "Cook Mode" toggle many recipe sites put right under the list.
+    // Headings are matched loosely because photos crop or misread them
+    // ("gredients", "nstructions"), but only on short heading-like lines.
+    // Works on plain strings or on the reader's line objects (via textOf).
+    function keepIngredientSection(items, textOf = (item) => item) {
+      const isHeading = (text, pattern) =>
+        text.length <= 24 && text.split(/\s+/).length <= 3 && pattern.test(text);
+      const isEndOfList = (text) =>
+        isHeading(text, /nstruct|irection|method|preparation/i) || /\bcook mode\b/i.test(text);
+
+      const start = items.findIndex((item) =>
+        isHeading(textOf(item).trim(), /ingred|gredie|edient/i)
+      );
+      const from = start === -1 ? 0 : start + 1;
+      const stop = items.slice(from).findIndex((item) => isEndOfList(textOf(item).trim()));
+      const to = stop === -1 ? items.length : from + stop;
+
+      const section = items.slice(from, to);
+      // If trimming would leave no amounts at all, keep everything instead.
+      return section.some((item) => /\d/.test(textOf(item))) ? section : items;
     }
 
     // Rebuild the text from the reader's line positions. Its own "paragraph"
@@ -2037,7 +2202,9 @@
     // rows), so a blank line is only added where the vertical space between
     // two rows is clearly bigger than usual — a real gap between groups.
     function textFromScannedLines(scannedLines) {
-      const lines = scannedLines
+      // Trim to the ingredient list first, so nothing outside it (like a
+      // "Cook Mode" toggle) can get glued onto an ingredient below.
+      const lines = keepIngredientSection(scannedLines, (line) => line.text)
         .map((line) => ({
           text: line.text.replace(/\s+/g, " ").trim(),
           top: line.bbox.y0,
@@ -2122,7 +2289,7 @@
         const text = cleanScannedText(
           data.lines && data.lines.length > 0
             ? textFromScannedLines(data.lines)
-            : data.text || ""
+            : keepIngredientSection((data.text || "").split("\n")).join("\n")
         );
 
         if (!text) {

@@ -651,8 +651,13 @@
         pints: "pint",
         quart: "quart",
         quarts: "quart",
+        qt: "quart",
+        qts: "quart",
         gallon: "gallon",
         gallons: "gallon",
+
+        stick: "stick",
+        sticks: "stick",
 
         tbsp: "tbsp",
         tbsps: "tbsp",
@@ -758,9 +763,13 @@
       guessedWeight: 0.2
     };
 
-    // Cup and spoon sizes people actually own — so never "5/8 tsp".
+    // Cup and spoon sizes people actually own — so never "5/8 tsp". Each step
+    // has a "rank" (lower = simpler to grab): whole, then 1/2, then 1/4 or
+    // 3/4, then thirds (and 1/8 tsp).
     const CUP_STEPS = [0, 1 / 4, 1 / 3, 1 / 2, 2 / 3, 3 / 4];
+    const CUP_STEP_RANKS = [0, 2, 3, 1, 3, 2];
     const TSP_STEPS = [0, 1 / 8, 1 / 4, 1 / 2, 3 / 4];
+    const TSP_STEP_RANKS = [0, 3, 2, 1, 2];
 
     function formatCups(cups) {
       return `${decimalToFraction(cups)} ${cups <= 1 ? "cup" : "cups"}`;
@@ -779,12 +788,12 @@
       const out = [];
       const whole = Math.floor(targetTsp / 48);
       for (let w = Math.max(0, whole - 1); w <= whole + 1; w += 1) {
-        for (const step of CUP_STEPS) {
+        CUP_STEPS.forEach((step, i) => {
           const cups = w + step;
           if (cups >= 0.25) {
-            out.push({ tsp: cups * 48, text: formatCups(cups) });
+            out.push({ tsp: cups * 48, text: formatCups(cups), rank: CUP_STEP_RANKS[i] });
           }
-        }
+        });
       }
       return out;
     }
@@ -793,7 +802,7 @@
     function tbspMeasures(maxTbsp) {
       const out = [];
       for (let halves = 2; halves <= maxTbsp * 2; halves += 1) {
-        out.push({ tsp: halves * 1.5, text: formatTbsp(halves / 2) });
+        out.push({ tsp: halves * 1.5, text: formatTbsp(halves / 2), rank: halves % 2 });
       }
       return out;
     }
@@ -802,11 +811,11 @@
     function tspMeasures() {
       const out = [];
       for (let w = 0; w <= 2; w += 1) {
-        for (const step of TSP_STEPS) {
+        TSP_STEPS.forEach((step, i) => {
           if (w + step > 0) {
-            out.push({ tsp: w + step, text: formatTsp(w + step) });
+            out.push({ tsp: w + step, text: formatTsp(w + step), rank: TSP_STEP_RANKS[i] });
           }
-        }
+        });
       }
       return out;
     }
@@ -823,15 +832,20 @@
         return "pinch";
       }
 
+      // The closest candidate within the limit — but if a simpler one (e.g.
+      // "7 1/2 cups" vs "7 2/3 cups") is nearly as close, within 2 points of
+      // error, take the simpler one.
       const closest = (candidates, limit) => {
-        let best = null;
-        for (const candidate of candidates) {
-          const error = Math.abs(candidate.tsp - tsp) / tsp;
-          if (error <= limit && (!best || error < best.error)) {
-            best = { ...candidate, error };
-          }
+        const scored = candidates
+          .map((candidate) => ({ ...candidate, error: Math.abs(candidate.tsp - tsp) / tsp }))
+          .filter((candidate) => candidate.error <= limit);
+        if (scored.length === 0) {
+          return null;
         }
-        return best;
+        const bestError = Math.min(...scored.map((candidate) => candidate.error));
+        return scored
+          .filter((candidate) => candidate.error <= bestError + 0.02)
+          .sort((a, b) => (a.rank || 0) - (b.rank || 0) || a.error - b.error)[0];
       };
 
       // 1) One cup measure (1/4 cup and up).
@@ -1099,7 +1113,9 @@
         // Notes written without a comma: "soy sauce preferably a Filipino
         // brand", "chicken thighs cut into 1 inch pieces".
         .replace(/\s*,?\s+(?:preferably|ideally|such as)\b.*$/i, "")
-        .replace(/\s+(?:cut|chopped|diced|sliced)\s+(?:into|in)\b.*$/i, "");
+        .replace(/\s+(?:cut|chopped|diced|sliced)\s+(?:into|in)\b.*$/i, "")
+        // Filler that doesn't change what you buy or measure ("good beef stock").
+        .replace(/^(?:good|good-quality|high-quality|best-quality|quality)\s+/i, "");
 
       let parts = base.split(/\s*,\s*/).filter(Boolean);
       while (
@@ -1188,12 +1204,18 @@
       const lines = text.split(/\r?\n/);
       const out = [];
 
+      // A line ending in "or" or "/" ("400g or") lost its alternative amount
+      // to the next line ("3-4 cups carrots") — glue those back together too.
+      const endsWithAlternative = /(?:\bor|\/)\s*$/i;
+      const startsWithAmount = /^\s*(?:\d|[¼½¾⅓⅔⅛⅜⅝⅞])/;
+
       for (let i = 0; i < lines.length; i += 1) {
-        if (
-          amountOnly.test(lines[i]) &&
-          i + 1 < lines.length &&
-          lines[i + 1].trim()
-        ) {
+        const next = lines[i + 1];
+        const isDangling =
+          amountOnly.test(lines[i]) ||
+          (endsWithAlternative.test(lines[i]) && next !== undefined && startsWithAmount.test(next));
+
+        if (isDangling && next !== undefined && next.trim()) {
           out.push(`${lines[i].trim()} ${lines[i + 1].trim()}`);
           i += 1; // the next line was consumed
         } else {
@@ -1242,6 +1264,14 @@
         ""
       );
 
+      // An amount after "or" ("400g or 3.4-4c carrots") is the same ingredient
+      // in other units, not a new one. Hide the space after those "or"s from
+      // the rules below so they can't split there (restored at the end).
+      out = out.replace(
+        /\bor[^\S\r\n]+(?=\d|[¼½¾⅓⅔⅛⅜⅝⅞])/gi,
+        (match) => `${match.trimEnd()}`
+      );
+
       // (a) No-space boundary — a letter sitting directly against a digit or
       //     fraction glyph, e.g. "Apple2", "garlic1/2".
       out = out.replace(/([A-Za-z])(\d|[¼½¾⅓⅔⅛⅜⅝⅞])/g, "$1\n$2");
@@ -1278,6 +1308,8 @@
         new RegExp("([A-Za-z,])[^\\S\\r\\n]+(" + FRAC + ")(?=[^\\S\\r\\n]+(?!" + DIM + "\\b)\\S)", "gi"),
         "$1\n$2"
       );
+
+      out = out.replace(//g, " ");
 
       // Restore the protected parenthetical notes.
       out = out.replace(/(\d+)/g, (match, index) => stash[Number(index)]);
@@ -1349,14 +1381,38 @@
         .replace(/\b(\w+)\s+\1\b/gi, "$1");
     }
 
-    // Recipe shorthand: a capital "T" after a number means tablespoon, a
-    // lowercase "t" means teaspoon (e.g. "2 T butter", "1 t salt"). Case
-    // matters, so this runs before anything lowercases the text. The "\b"
-    // keeps it from touching real words like "2 tomatoes" or "1 Tbsp".
+    // Recipe shorthand after a number: capital "T" = tablespoon, lowercase
+    // "t" = teaspoon, "c"/"C" = cup ("2 T butter", "1 t salt", "2c onions",
+    // "3/4C flour"). Case matters, so this runs before anything lowercases
+    // the text. "\b" keeps it off real words ("2 tomatoes", "1 Tbsp", "2 cups").
+    // "c" only counts after a small amount (1-2 digits or a fraction), so an
+    // oven's "260C" stays Celsius.
     function expandTeaspoonTablespoonShorthand(text) {
       return text
         .replace(/(\d)\s*T\b/g, "$1 tbsp")
-        .replace(/(\d)\s*t\b/g, "$1 tsp");
+        .replace(/(\d)\s*t\b/g, "$1 tsp")
+        // Before the amount: start of line, a non-digit, or a "/" that follows
+        // a letter ("500g/4c" — a separator), but not one that follows a digit
+        // ("3/4C" — that's a fraction, matched whole instead).
+        .replace(
+          /(^|[^\d.\/]|[^\d]\/)(\d{1,2}(?:\.\d+)?|\d+\/\d+|\d*[¼½¾⅓⅔⅛⅜⅝⅞])\s*[cC]\b/g,
+          "$1$2 cup"
+        );
+    }
+
+    // "1 heaping cup" -> "1 cup" (heaping/scant/level don't change which cup
+    // you grab), and "3/4 cup + 3 tbsp" -> "3/4 cup 3 tbsp" so both parts are
+    // added up as one amount.
+    function normalizeAmountWords(text) {
+      return text
+        .replace(
+          /(\d|[¼½¾⅓⅔⅛⅜⅝⅞])\s+(?:heaping|heaped|scant|level|generous|rounded)\s+(?=(?:cups?|tbsps?|tablespoons?|tsps?|teaspoons?)\b)/gi,
+          "$1 "
+        )
+        .replace(
+          /\b(cups?|tbsps?|tablespoons?|tsps?|teaspoons?)\s*(?:\+|plus|and)\s*(?=\d|[¼½¾⅓⅔⅛⅜⅝⅞])/gi,
+          "$1 "
+        );
     }
 
     // Units that can end up glued to the word after them when spaces get lost
@@ -1433,11 +1489,12 @@
       return text;
     }
 
-    // Recipes often list an amount twice — metric then US — like
-    // "2.5 - 3 kg / 5-6 lb turkey", "150 g / 5 oz (10 tbsp) butter" or
-    // "50g / 4 tbsp butter". Keep the US side and drop the metric side, so the
-    // output uses the amount the recipe already gave instead of re-deriving
-    // awkward fractions.
+    // Recipes often list an amount twice — metric, then US — separated by "/"
+    // or "or": "2.5 - 3 kg / 5-6 lb turkey", "50g / 4 tbsp butter", "200g or
+    // 2 cups onions", "115g/1 stick butter", "450g/1 pint beer". Keep the US
+    // side and drop the metric side, so the output uses the amount the recipe
+    // already gave instead of re-deriving awkward fractions (or, worse,
+    // weighing beer in pounds).
     function preferGivenUsUnit(line) {
       const amount = "\\d+(?:[.,]\\d+)?(?:\\s*[-–]\\s*\\d+(?:[.,]\\d+)?)?";
       // US amounts may also be fractions: "1/4 cup", "1 1/2 tbsp", "¾ cup".
@@ -1446,21 +1503,28 @@
       const metricUnit =
         "(?:kg|kgs?|kilograms?|g|grams?|ml|milliliters?|millilitres?|l|liters?|litres?)";
       const usUnit =
-        "(?:lbs?|pounds?|oz|ounces?|cups?|tbsps?|tablespoons?|tsps?|teaspoons?)";
+        "(?:lbs?|pounds?|oz|ounces?|cups?|tbsps?|tablespoons?|tsps?|teaspoons?|" +
+        "pints?|quarts?|qts?|gallons?|sticks?)";
+      const or = "\\s*(?:/|\\bor\\b)\\s*";
 
-      // "metric / US" (e.g. "2.5-3 kg / 5-6 lb", "50g / 4 tbsp") -> keep the US side.
+      // "metric / US" (e.g. "2.5-3 kg / 5-6 lb", "200g or 2 cups") -> keep the US side.
       line = line.replace(
-        new RegExp(
-          "^" + amount + "\\s*" + metricUnit + "\\s*/\\s*(" + usAmount + "\\s*" + usUnit + ")\\b",
-          "i"
-        ),
+        new RegExp("^" + amount + "\\s*" + metricUnit + or + "(" + usAmount + "\\s*" + usUnit + ")\\b", "i"),
         "$1"
       );
 
       // "US / metric" (e.g. "8 oz / 227 g") -> keep the US side, drop metric.
       line = line.replace(
+        new RegExp("^(" + usAmount + "\\s*" + usUnit + ")" + or + amount + "\\s*" + metricUnit + "\\b", "i"),
+        "$1"
+      );
+
+      // "metric or metric" (e.g. "1800g or 1.8L/qt") -> keep the first; the
+      // second only restates it.
+      line = line.replace(
         new RegExp(
-          "^(" + usAmount + "\\s*" + usUnit + ")\\s*/\\s*" + amount + "\\s*" + metricUnit + "\\b",
+          "^(" + amount + "\\s*" + metricUnit + ")" + or + amount + "\\s*" + metricUnit +
+            "(?:\\s*/\\s*[a-z]+)?\\b",
           "i"
         ),
         "$1"
@@ -1471,8 +1535,10 @@
 
     function parseRecipeLine(line) {
       const cleanedLine = preferGivenUsUnit(
-        repairGluedAmount(
-          expandTeaspoonTablespoonShorthand(stripLeadingMarkers(line.trim()))
+        normalizeAmountWords(
+          repairGluedAmount(
+            expandTeaspoonTablespoonShorthand(stripLeadingMarkers(line.trim()))
+          )
         )
       );
 
@@ -1518,7 +1584,12 @@
       // flagging them. A counted "1 pinch salt" still has a number and converts
       // normally below.
       if (!/\d|[¼½¾⅓⅔⅛⅜⅝⅞]/.test(cleanedLine)) {
-        return { passthrough: true, originalLine: cleanedLine };
+        // A decorated heading like "-- RECIPE --" lost its leading dashes to
+        // the bullet stripper; drop the trailing ones too so it reads "RECIPE".
+        return {
+          passthrough: true,
+          originalLine: cleanedLine.replace(/\s*[-–—=*~_#]{2,}\s*$/, "")
+        };
       }
 
       // Tighten spaced number ranges ("3 -4", "3 - 4") into "3-4" so a range
@@ -1537,7 +1608,7 @@
         "g|gram|grams|kg|kgs|kilogram|kilograms|" +
         "ml|milliliter|milliliters|millilitre|millilitres|" +
         "l|liter|liters|litre|litres|" +
-        "cups?|pints?|quarts?|gallons?|" +
+        "cups?|pints?|quarts?|qts?|gallons?|sticks?|" +
         "tbsps?|tablespoons?|tsps?|teaspoons?|" +
         "fl\\.?\\s?oz\\.?|fluid\\s?ounces?|floz|" +
         "oz|ounces?|lbs?|pounds?";
@@ -1712,6 +1783,10 @@
 
         case "quart":
           return { text: cupsToFriendlyUS(resizedAmount * 4), approximate: false };
+
+        // A US stick of butter is 1/2 cup (8 tbsp).
+        case "stick":
+          return { text: cupsToFriendlyUS(resizedAmount / 2), approximate: false };
 
         case "gallon":
           return { text: cupsToFriendlyUS(resizedAmount * 16), approximate: false };

@@ -1050,6 +1050,15 @@
       const purpose = purposeMatch
         ? ` (${purposeMatch[1].replace(/^for\s+(?:the|a|an)\s+/i, "for ")})`
         : "";
+      // A can/jar size is what you shop by, so "can (14 oz) tomatoes" keeps
+      // its "(14 oz)" — it says which can, not how much to measure.
+      const containerMatch = text.match(
+        /^\s*((?:cans?|jars?|packages?|packets?|bags?|box(?:es)?|bottles?|cartons?|tins?|envelopes?)\s*)(\(\s*\d[^)]*\))/i
+      );
+      if (containerMatch) {
+        const rest = cleanIngredientName(text.slice(containerMatch[0].length));
+        return `${containerMatch[1].trim()} ${containerMatch[2]} ${rest}`.replace(/\s{2,}/g, " ").trim();
+      }
       let result = text.replace(/\([^)]*\)/g, "");
 
       const trailingMetricWeight =
@@ -1114,7 +1123,23 @@
     // drops every other note — how to cut it, what it's for, which brand
     // ("pitted Kalamata olives, cut into thirds" -> "pitted Kalamata olives").
     function simplifyIngredientName(name) {
-      const withoutBrand = name.replace(BRAND_NAMES, " ").replace(/\s{2,}/g, " ").trim();
+      const withoutBrand = name
+        .replace(BRAND_NAMES, " ")
+        // A spaced dash starts a note just like a comma does:
+        // "beef chuck - trimmed of fat" = "beef chuck, trimmed of fat".
+        .replace(/\s+[-–—]\s+/g, ", ")
+        .replace(/\s{2,}/g, " ")
+        .trim();
+
+      // The piece size is worth keeping for stews and the like ("cut into
+      // 2" cubes" -> "2" cubes"); a vague "large wedges" is not.
+      const sizeMatch = withoutBrand.match(
+        /\b(?:cut|chopped|diced|sliced)\s+(?:in|into)\s+(?:about\s+)?((?:\d+(?:[.\/]\d+)?|[¼½¾⅓⅔⅛])(?:\s*[-–]\s*(?:\d+(?:[.\/]\d+)?|[¼½¾⅓⅔⅛]))?\s*(?:["”″]|-?\s*inch(?:es)?\b|\s?cm\b)\s*[a-z]*)/i
+      );
+      const sizeNote = sizeMatch
+        ? `, ${sizeMatch[1].replace(/[”″]/g, '"').replace(/\s*-?\s*inch(?:es)?\b/i, '"').trim()}`
+        : "";
+
       // Never strip a name down to nothing (e.g. just "Philadelphia").
       const base = (/[a-z]/i.test(withoutBrand) ? withoutBrand : name)
         // Notes written without a comma: "soy sauce preferably a Filipino
@@ -1149,7 +1174,7 @@
           : `${prefixes.join(" ")} ${result}`;
       }
 
-      return result.replace(/\s+,/g, ",").replace(/\s{2,}/g, " ").trim();
+      return `${result}${sizeNote}`.replace(/\s+,/g, ",").replace(/\s{2,}/g, " ").trim();
     }
 
     // Strips leading bullet/checkbox markers that come along when pasting
@@ -1382,6 +1407,12 @@
       } while (outside !== previousOutside);
       outside = outside.replace(/\s{2,}/g, " ").trim();
 
+      // "1 can (14 oz) tomatoes" already has its own count: the "(14 oz)"
+      // only says how big the can is.
+      if (/^(?:\d|[¼½¾⅓⅔⅛⅜⅝⅞])/.test(outside)) {
+        return null;
+      }
+
       // A count whose noun is already in the name ("4 thighs" + "Bone-in,
       // skin-on chicken thighs") only needs its number: "4 Bone-in, ...".
       let amount = inner;
@@ -1558,11 +1589,30 @@
       return line;
     }
 
+    // A typo'd "25g (about 3 T scallions, minced" never closes its "(":
+    // close it right after the amount ("(about 3 tbsp) scallions"), or drop
+    // the stray "(" when no amount follows it.
+    function closeUnclosedParenthesis(text) {
+      const open = text.lastIndexOf("(");
+      if (open === -1 || text.indexOf(")", open) !== -1) {
+        return text;
+      }
+      const after = text.slice(open + 1);
+      const amount = after.match(
+        /^\s*(?:(?:about|approx\.?|approximately|roughly|around|~)\s*)?[\d¼½¾⅓⅔⅛⅜⅝⅞][\d¼½¾⅓⅔⅛⅜⅝⅞.,\/\s–-]*\s*(?:cups?|tbsps?|tablespoons?|tsps?|teaspoons?|sticks?|pints?|quarts?|lbs?|pounds?|oz|ounces?|g|kg|ml|l)\b\.?/i
+      );
+      return amount
+        ? `${text.slice(0, open + 1)}${amount[0].trim()})${after.slice(amount[0].length)}`
+        : `${text.slice(0, open)}${after}`.replace(/\s{2,}/g, " ");
+    }
+
     function parseRecipeLine(line) {
       const cleanedLine = preferGivenUsUnit(
         normalizeAmountWords(
           repairGluedAmount(
-            expandTeaspoonTablespoonShorthand(stripLeadingMarkers(line.trim()))
+            closeUnclosedParenthesis(
+              expandTeaspoonTablespoonShorthand(stripLeadingMarkers(line.trim()))
+            )
           )
         )
       );
@@ -1936,7 +1986,72 @@
       }
 
       const resizedAmount = parsed.amount * multiplier;
+      if (parsed.unit === "count") {
+        return {
+          text: `${formatCount(resizedAmount)} ${matchCountToAmount(parsed.ingredient, resizedAmount)}`,
+          approximate: false,
+          isFullLine: true
+        };
+      }
       return convertAmountToText(parsed.unit, resizedAmount, parsed.ingredient);
+    }
+
+    // Things you count, so "1 large egg" x2 reads "2 large eggs" (and
+    // "2 large eggs" halved reads "1 large egg").
+    const COUNTABLE_NOUNS = [
+      "egg", "yolk", "white", "onion", "shallot", "carrot", "lemon", "lime",
+      "orange", "apple", "pear", "banana", "avocado", "potato", "tomato",
+      "pepper", "chili", "chile", "jalapeño", "jalapeno", "cucumber", "clove",
+      "leaf", "sprig", "stalk", "head", "can", "thigh", "breast", "drumstick",
+      "fillet", "steak", "tortilla", "wrapper", "bun", "date", "fig"
+    ];
+
+    // When the name starts with one of these, that's the word you count:
+    // "2 pinches black pepper", "2 cans tomatoes", "3 cloves garlic".
+    const LEADING_COUNT_WORDS = [
+      "pinch", "dash", "splash", "handful", "can", "jar", "package", "packet",
+      "bag", "box", "bunch", "head", "clove", "sprig", "stalk", "slice",
+      "piece", "sheet", "envelope", "bottle", "carton", "tin"
+    ];
+
+    function matchCountToAmount(name, amount) {
+      const plural = (singular) =>
+        singular === "leaf" ? "leaves"
+          : /(?:potato|tomato)$/.test(singular) ? `${singular}es`
+          : /(?:ch|sh|x)$/.test(singular) ? `${singular}es`
+          : `${singular}s`;
+
+      const firstWord = name.match(/^([A-Za-z]+)\b/);
+      const leading = firstWord &&
+        LEADING_COUNT_WORDS.find((word) => [word, plural(word)].includes(firstWord[1].toLowerCase()));
+      if (leading) {
+        const replacement = amount > 1 ? plural(leading) : leading;
+        return `${replacement}${name.slice(firstWord[1].length)}`;
+      }
+
+      // Leave any "(for pan sauce)" note at the end alone.
+      const [, main, note] = name.match(/^(.*?)(\s*\([^)]*\))?$/);
+      const lastWord = main.match(/([A-Za-zñ]+)$/);
+      if (!lastWord) {
+        return name;
+      }
+      const word = lastWord[1];
+      const lower = word.toLowerCase();
+      const singularOf = COUNTABLE_NOUNS.find((noun) => plural(noun) === lower);
+      let replacement = word;
+      if (amount > 1 && COUNTABLE_NOUNS.includes(lower)) {
+        replacement = plural(lower);
+      } else if (amount <= 1 && singularOf) {
+        replacement = singularOf;
+      }
+      if (replacement === lower || replacement === word) {
+        return name;
+      }
+      // Keep a capitalised name capitalised ("Egg" -> "Eggs").
+      if (word[0] !== word[0].toLowerCase()) {
+        replacement = replacement[0].toUpperCase() + replacement.slice(1);
+      }
+      return `${main.slice(0, -word.length)}${replacement}${note || ""}`;
     }
 
     function convertRecipe() {

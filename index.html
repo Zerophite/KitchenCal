@@ -555,7 +555,15 @@
       { names: ["garlic powder"], gramsPerCup: 240 },
       { names: ["onion powder"], gramsPerCup: 100 },
       { names: ["ground ginger", "ginger powder"], gramsPerCup: 168 },
-      { names: ["black pepper", "ground black pepper", "pepper"], gramsPerCup: 120 },
+      // Fresh and pickled peppers come before ground "pepper", so "red bell
+      // pepper" and "pepperoncini" aren't measured like ground black pepper.
+      // "rough" = chopped produce packs very differently cup to cup, so it
+      // rounds as generously as a guess does ("1/3 cup", not "6 1/2 tbsp").
+      { names: ["red pepper flakes", "crushed red pepper", "chili flakes", "chilli flakes"], gramsPerCup: 80 },
+      { names: ["bell pepper", "bell peppers", "red pepper", "green pepper", "yellow pepper",
+        "pepperoncini", "jalapeno", "jalapeño", "jalapenos", "jalapeños", "chili pepper", "chile pepper"],
+        gramsPerCup: 150, rough: true },
+      { names: ["black pepper", "ground black pepper", "white pepper", "pepper"], gramsPerCup: 120 },
       { names: ["cayenne pepper", "cayenne"], gramsPerCup: 96 },
       { names: ["chili powder"], gramsPerCup: 120 },
       { names: ["paprika"], gramsPerCup: 120 },
@@ -571,10 +579,10 @@
       { names: ["grated ginger", "minced ginger", "fresh ginger", "ginger"], gramsPerCup: 96 },
       { names: ["grated garlic", "minced garlic", "garlic"], gramsPerCup: 144 },
 
+      { names: ["peanut butter"], gramsPerCup: 258 },
       { names: ["butter"], gramsPerCup: 227 },
       { names: ["shortening"], gramsPerCup: 205 },
       { names: ["cream cheese"], gramsPerCup: 227 },
-      { names: ["peanut butter"], gramsPerCup: 258 },
       { names: ["yogurt", "yoghurt"], gramsPerCup: 245 },
       { names: ["sour cream"], gramsPerCup: 240 },
 
@@ -669,16 +677,21 @@
       return unitMap[cleanedUnit] || cleanedUnit;
     }
 
-    function findDensity(ingredientName) {
+    // Matches whole words only. Plain substring matching measured "unsalted
+    // butter" as salt, "buttermilk" as butter, and "pepperoncini" as ground
+    // pepper.
+    function findDensityEntry(ingredientName) {
       const name = ingredientName.toLowerCase();
+      const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const hasWords = (keyword) =>
+        new RegExp("(^|[^a-z])" + escapeRegExp(keyword) + "($|[^a-z])").test(name);
 
-      for (const item of ingredientDensities) {
-        if (item.names.some((keyword) => name.includes(keyword))) {
-          return item.gramsPerCup;
-        }
-      }
+      return ingredientDensities.find((item) => item.names.some(hasWords)) || null;
+    }
 
-      return null;
+    function findDensity(ingredientName) {
+      const entry = findDensityEntry(ingredientName);
+      return entry ? entry.gramsPerCup : null;
     }
 
     function decimalToFraction(value) {
@@ -732,115 +745,154 @@
       return closest.text;
     }
 
-    // Fractions that correspond to sizes in a standard US measuring cup set.
-    // Deliberately excludes 3/8, 5/8, 7/8 — nobody owns a single cup for those.
-    const NICE_CUP_FRACTIONS_IN_TSP = [
-      { tsp: 0, label: "" },
-      { tsp: 6, label: "1/8" },
-      { tsp: 12, label: "1/4" },
-      { tsp: 16, label: "1/3" },
-      { tsp: 24, label: "1/2" },
-      { tsp: 32, label: "2/3" },
-      { tsp: 36, label: "3/4" }
-    ];
+    // How close a rounded measurement must stay to the true amount. Amounts
+    // already in US cups/spoons stay nearly exact, so a US recipe at x1 comes
+    // back as written. Metric volumes allow a little more (250 ml reads as
+    // "1 cup"). Grams of a known ingredient a little more again. Grams of an
+    // ingredient the app can only estimate (as if it were water) round
+    // generously, since that estimate is rough to begin with.
+    const ROUNDING = {
+      usVolume: 0.02,
+      metricVolume: 0.06,
+      knownWeight: 0.12,
+      guessedWeight: 0.2
+    };
 
-    function cupsToFriendlyUS(cups) {
-      if (cups >= 0.25) {
-        // Snap to the nearest teaspoon (1/48 cup) first for precision, then
-        // find the largest "nice" cup fraction that fits, and express
-        // whatever's left over as tbsp/tsp rather than an odd cup fraction.
-        const totalTsp = Math.round(cups * 48);
-        const wholeCups = Math.floor(totalTsp / 48);
-        const tspIntoCup = totalTsp - wholeCups * 48;
+    // Cup and spoon sizes people actually own — so never "5/8 tsp".
+    const CUP_STEPS = [0, 1 / 4, 1 / 3, 1 / 2, 2 / 3, 3 / 4];
+    const TSP_STEPS = [0, 1 / 8, 1 / 4, 1 / 2, 3 / 4];
 
-        let chosen = NICE_CUP_FRACTIONS_IN_TSP[0];
-        for (const candidate of NICE_CUP_FRACTIONS_IN_TSP) {
-          if (candidate.tsp <= tspIntoCup) {
-            chosen = candidate;
-          }
-        }
-
-        const remainderTsp = tspIntoCup - chosen.tsp;
-        const totalCupsValue = wholeCups + chosen.tsp / 48;
-        // "cup" for 1 or less ("1/2 cup", "1 cup 2 tbsp"), "cups" above that.
-        const unitWord = totalCupsValue <= 1 ? "cup" : "cups";
-
-        let cupLabel;
-        if (wholeCups > 0 && chosen.label) {
-          cupLabel = `${wholeCups} ${chosen.label} ${unitWord}`;
-        } else if (wholeCups > 0) {
-          cupLabel = `${wholeCups} ${unitWord}`;
-        } else if (chosen.label) {
-          cupLabel = `${chosen.label} ${unitWord}`;
-        } else {
-          cupLabel = `0 ${unitWord}`;
-        }
-
-        if (remainderTsp === 0) {
-          return cupLabel;
-        }
-
-        const remainderTbsp = Math.floor(remainderTsp / 3);
-        const remainderTspOnly = remainderTsp % 3;
-        const remainderParts = [];
-
-        if (remainderTbsp > 0) {
-          remainderParts.push(`${remainderTbsp} tbsp`);
-        }
-
-        if (remainderTspOnly > 0) {
-          remainderParts.push(`${remainderTspOnly} tsp`);
-        }
-
-        return `${cupLabel} ${remainderParts.join(" ")}`;
-      }
-
-      // Below 1/4 cup: split into whole tablespoons + a leftover teaspoon
-      // amount (e.g. 10 tsp -> "3 tbsp + 1 tsp") instead of one fractional
-      // tbsp figure like "3¼ tbsp", which isn't something you can measure.
-      const totalTeaspoons = cups * 48;
-      const roundedTotalTeaspoons = Math.max(1 / 8, Math.round(totalTeaspoons * 8) / 8);
-      const wholeTablespoons = Math.floor(roundedTotalTeaspoons / 3);
-      const remainderTeaspoons =
-        Math.round((roundedTotalTeaspoons - wholeTablespoons * 3) * 8) / 8;
-
-      if (wholeTablespoons > 0 && remainderTeaspoons > 0) {
-        return `${wholeTablespoons} tbsp ${decimalToFraction(remainderTeaspoons)} tsp`;
-      }
-
-      if (wholeTablespoons > 0) {
-        return `${wholeTablespoons} tbsp`;
-      }
-
-      return `${decimalToFraction(remainderTeaspoons)} tsp`;
+    function formatCups(cups) {
+      return `${decimalToFraction(cups)} ${cups <= 1 ? "cup" : "cups"}`;
     }
 
-    function liquidToFriendlyUS(millilitres) {
-      const cups = millilitres / 236.5882365;
+    function formatTbsp(tbsp) {
+      return `${decimalToFraction(tbsp)} tbsp`;
+    }
 
-      if (cups >= 0.25) {
-        return cupsToFriendlyUS(cups);
+    function formatTsp(tsp) {
+      return `${decimalToFraction(tsp)} tsp`;
+    }
+
+    // Measures made with one cup size near the target (amounts in teaspoons).
+    function cupMeasures(targetTsp) {
+      const out = [];
+      const whole = Math.floor(targetTsp / 48);
+      for (let w = Math.max(0, whole - 1); w <= whole + 1; w += 1) {
+        for (const step of CUP_STEPS) {
+          const cups = w + step;
+          if (cups >= 0.25) {
+            out.push({ tsp: cups * 48, text: formatCups(cups) });
+          }
+        }
+      }
+      return out;
+    }
+
+    // Whole and half tablespoons, from 1 up to maxTbsp.
+    function tbspMeasures(maxTbsp) {
+      const out = [];
+      for (let halves = 2; halves <= maxTbsp * 2; halves += 1) {
+        out.push({ tsp: halves * 1.5, text: formatTbsp(halves / 2) });
+      }
+      return out;
+    }
+
+    // Teaspoon amounts below a tablespoon, in measuring-spoon steps.
+    function tspMeasures() {
+      const out = [];
+      for (let w = 0; w <= 2; w += 1) {
+        for (const step of TSP_STEPS) {
+          if (w + step > 0) {
+            out.push({ tsp: w + step, text: formatTsp(w + step) });
+          }
+        }
+      }
+      return out;
+    }
+
+    // Turns an amount (in cups) into the simplest thing to measure: one cup
+    // size if that's close enough, else one spoon size, else two measures —
+    // never a pile like "8 1/3 cups 1 tbsp 2 tsp" or an odd "2 5/8 tsp".
+    function cupsToFriendlyUS(cups, tolerance = ROUNDING.usVolume) {
+      const tsp = cups * 48;
+      if (!(tsp > 0)) {
+        return "0 tsp";
+      }
+      if (tsp < 0.09) {
+        return "pinch";
       }
 
-      const tablespoons = millilitres / 14.78676478125;
+      const closest = (candidates, limit) => {
+        let best = null;
+        for (const candidate of candidates) {
+          const error = Math.abs(candidate.tsp - tsp) / tsp;
+          if (error <= limit && (!best || error < best.error)) {
+            best = { ...candidate, error };
+          }
+        }
+        return best;
+      };
 
-      if (tablespoons >= 1) {
-        const roundedTablespoons = Math.round(tablespoons * 4) / 4;
-        return `${decimalToFraction(roundedTablespoons)} tbsp`;
+      // 1) One cup measure (1/4 cup and up).
+      if (tsp >= 12 * (1 - tolerance)) {
+        const cup = closest(cupMeasures(tsp), tolerance);
+        if (cup) {
+          return cup.text;
+        }
       }
 
-      const teaspoons = millilitres / 4.92892159375;
-      const roundedTeaspoons = Math.max(1 / 8, Math.round(teaspoons * 8) / 8);
+      // 2) One tablespoon measure, up to 8 tbsp (1/2 cup).
+      const spoon = closest(tbspMeasures(8), tolerance);
+      if (spoon) {
+        return spoon.text;
+      }
 
-      return `${decimalToFraction(roundedTeaspoons)} tsp`;
+      // 3) One teaspoon measure, for less than a tablespoon.
+      const small = closest(tspMeasures(), tolerance);
+      if (small) {
+        return small.text;
+      }
+
+      // 4) Two measures: cups + spoons, or tablespoons + teaspoons.
+      const combos = [];
+      if (tsp >= 12) {
+        for (const cup of cupMeasures(tsp)) {
+          if (cup.tsp < tsp) {
+            for (const extra of [...tbspMeasures(4), ...tspMeasures()]) {
+              combos.push({ tsp: cup.tsp + extra.tsp, text: `${cup.text} ${extra.text}` });
+            }
+          }
+        }
+      } else {
+        for (let tbsp = 1; tbsp * 3 < tsp; tbsp += 1) {
+          for (const extra of tspMeasures()) {
+            combos.push({ tsp: tbsp * 3 + extra.tsp, text: `${formatTbsp(tbsp)} ${extra.text}` });
+          }
+        }
+      }
+      const combo = closest(combos, Infinity);
+      if (combo) {
+        return combo.text;
+      }
+
+      // Too small for a combination: the nearest single spoon.
+      return closest([...tbspMeasures(8), ...tspMeasures()], Infinity).text;
+    }
+
+    function liquidToFriendlyUS(millilitres, tolerance = ROUNDING.metricVolume) {
+      return cupsToFriendlyUS(millilitres / 236.5882365, tolerance);
     }
 
     function weightToUS(grams, ingredientName) {
-      const gramsPerCup = findDensity(ingredientName);
+      const entry = findDensityEntry(ingredientName);
 
-      if (gramsPerCup) {
+      if (entry) {
         return {
-          text: cupsToFriendlyUS(grams / gramsPerCup),
+          text: cupsToFriendlyUS(
+            grams / entry.gramsPerCup,
+            entry.rough ? ROUNDING.guessedWeight : ROUNDING.knownWeight
+          ),
           approximate: true
         };
       }
@@ -857,7 +909,7 @@
 
       if (grams > 0 && grams < BULK_THRESHOLD_GRAMS) {
         return {
-          text: cupsToFriendlyUS(grams / WATER_GRAMS_PER_CUP),
+          text: cupsToFriendlyUS(grams / WATER_GRAMS_PER_CUP, ROUNDING.guessedWeight),
           approximate: true
         };
       }
@@ -992,6 +1044,14 @@
 
       return simplifyIngredientName(
         result
+          // Fractions in the name were turned into decimals for parsing
+          // ("or 1 1/2 tsp kosher salt" -> "1.5"); show them as fractions again.
+          .replace(/\d*\.\d+/g, (decimal) => {
+            const value = Number.parseFloat(decimal);
+            return Math.abs(value * 24 - Math.round(value * 24)) < 0.01
+              ? decimalToFraction(value)
+              : decimal;
+          })
           .replace(/\s{2,}/g, " ")
           .replace(/[,;:\-–]+$/, "")
           .trim()
@@ -1011,42 +1071,50 @@
       "cubed", "halved", "quartered", "sifted", "packed", "zested", "julienned"
     ]);
 
-    // Adverbs dropped when a prep word moves ("finely grated" -> "grated").
-    const PREP_ADVERBS =
-      /^(?:very\s+)?(?:finely|roughly|coarsely|thinly|thickly|freshly|lightly|well|firmly|loosely|gently|fine)\s+/i;
+    // Words that only say how finely, or how big, something is cut — dropped
+    // when a prep note moves to the front ("small diced" -> "diced",
+    // "very finely chopped" -> "chopped").
+    const NOTE_QUALIFIERS =
+      /^(?:(?:very|finely|roughly|coarsely|thinly|thickly|freshly|lightly|well|firmly|loosely|gently|fine|small|medium|large|thin|thick)\s+)+/i;
 
-    // Trailing notes that don't change what you measure, so they're dropped
-    // (", at room temperature", ", divided", ", for dusting", ", to taste").
-    // Also covers suggestions like ", preferably a Filipino brand like Silver
-    // Swan", ", such as vegetable" or ", see note 2".
-    const DROPPABLE_NOTE =
-      /^(?:(?:at\s+)?room[\s-]?temp(?:erature)?|divided|optional|cold|warm|chilled|cool|lukewarm|hot|ice[\s-]?cold|drained|rinsed|peeled|(?:drained|rinsed) and (?:drained|rinsed)|(?:or more\s+)?to taste|as needed|if needed|plus more\b.*|for (?:dusting|serving|garnish|garnishing|frying|greasing|brushing|topping|sprinkling|decorating|the pan)\b.*|(?:preferably|ideally|such as|like|e\.?g\.?|see note|note)\b.*|or (?:your )?(?:favou?rite)\b.*)$/i;
+    // How-finely words inside the name itself ("coarsely grated Parmesan" ->
+    // "grated Parmesan", "Thinly sliced onions" -> "sliced onions").
+    const NAME_ADVERBS =
+      /\b(?:very\s+)?(?:finely|roughly|coarsely|thinly|thickly|freshly|lightly|loosely|gently)\s+/gi;
 
-    // Shortens an ingredient name to what you actually need to know: removes
-    // brand names, moves a lone prep word to the front, and drops trailing
-    // notes. An unrecognized trailing note (e.g. "skin on, bone in") is kept,
-    // since it may matter for buying or cooking.
+    // A single describing word before the first comma belongs to the name:
+    // "aged, coarsely grated Parmesan" is one ingredient, not "aged" + a note.
+    const LEADING_DESCRIPTOR =
+      /^(?:aged|fresh|large|small|medium|whole|raw|ripe|dry|frozen|boneless|skinless|extra|light|dark|sweet|sharp|mild|plain|organic|hot|cold|warm|[a-z]{3,}ed)$/i;
+
+    // Shortens an ingredient name to what you need when you're busy cooking:
+    // the ingredient plus at most a prep word. Removes brand names, moves a
+    // lone prep note to the front ("carrots, grated" -> "grated carrots"), and
+    // drops every other note — how to cut it, what it's for, which brand
+    // ("pitted Kalamata olives, cut into thirds" -> "pitted Kalamata olives").
     function simplifyIngredientName(name) {
       const withoutBrand = name.replace(BRAND_NAMES, " ").replace(/\s{2,}/g, " ").trim();
       // Never strip a name down to nothing (e.g. just "Philadelphia").
-      let result = (/[a-z]/i.test(withoutBrand) ? withoutBrand : name)
-        // A suggestion with its comma lost ("soy sauce preferably a Filipino
-        // brand") is dropped too; the comma'd form is handled below.
-        .replace(/\s*,?\s+(?:preferably|ideally|such as)\b.*$/i, "");
+      const base = (/[a-z]/i.test(withoutBrand) ? withoutBrand : name)
+        // Notes written without a comma: "soy sauce preferably a Filipino
+        // brand", "chicken thighs cut into 1 inch pieces".
+        .replace(/\s*,?\s+(?:preferably|ideally|such as)\b.*$/i, "")
+        .replace(/\s+(?:cut|chopped|diced|sliced)\s+(?:into|in)\b.*$/i, "");
 
-      const prefixes = [];
-      let match;
-      while ((match = result.match(/^(.*\S)\s*,\s*([^,]+)$/))) {
-        const clause = match[2].trim().replace(PREP_ADVERBS, "").toLowerCase();
-
-        if (MOVABLE_PREP.has(clause)) {
-          prefixes.unshift(clause);
-        } else if (!DROPPABLE_NOTE.test(clause)) {
-          break; // unknown note — keep it
-        }
-
-        result = match[1];
+      let parts = base.split(/\s*,\s*/).filter(Boolean);
+      while (
+        parts.length > 1 &&
+        !/\s/.test(parts[0]) &&
+        LEADING_DESCRIPTOR.test(parts[0])
+      ) {
+        parts = [`${parts[0]} ${parts[1]}`, ...parts.slice(2)];
       }
+
+      let result = (parts[0] || base).replace(NAME_ADVERBS, "");
+      const prefixes = parts
+        .slice(1)
+        .map((note) => note.toLowerCase().replace(NOTE_QUALIFIERS, "").trim())
+        .filter((note) => MOVABLE_PREP.has(note));
 
       if (prefixes.length > 0) {
         // Keep a size word first, the way recipes say it:
@@ -1455,7 +1523,14 @@
 
       // Tighten spaced number ranges ("3 -4", "3 - 4") into "3-4" so a range
       // like "3 -4 tablespoons sugar" isn't mistaken for a plain count of "3".
+      // A range that repeats its unit ("50g-75g", "1 cup - 2 cups") becomes
+      // "50-75 g" first, otherwise "50g" was taken alone and "-75g" ended up
+      // stuck to the ingredient name.
       const normalizedLine = normalizeFractionsInLine(cleanedLine)
+        .replace(
+          /^(\d+(?:[.,]\d+)?)\s*(g|grams?|kg|ml|l|oz|lbs?|cups?|tbsps?|tsps?)\s*[-–]\s*(\d+(?:[.,]\d+)?)\s*\2s?\b/i,
+          "$1-$3 $2"
+        )
         .replace(/(\d)\s*[-–]\s*(\d)/g, "$1-$2");
 
       const supportedUnits =
@@ -1656,7 +1731,7 @@
         // through milliliters into the same cup/tbsp/tsp ladder as ml/l.
         case "fl_oz":
           return {
-            text: liquidToFriendlyUS(resizedAmount * 29.5735295625),
+            text: liquidToFriendlyUS(resizedAmount * 29.5735295625, ROUNDING.usVolume),
             approximate: false
           };
 
@@ -1680,6 +1755,65 @@
       }
     }
 
+    // Writes a range with its unit once — "1 - 2 tsp", not "1 tsp - 2 tsp" —
+    // and, when the two ends landed on different units but both fit one spoon
+    // size exactly, uses that: "6 - 8 tbsp", not "6 tbsp - 1/2 cup".
+    function joinRange(lowText, highText) {
+      const TSP_PER = { cup: 48, tbsp: 3, tsp: 1 };
+
+      // "1 tbsp 1 tsp" -> 4 tsp in total; "1/3 cup" -> a single 1/3-cup measure.
+      const parse = (text) => {
+        const pounds = text.match(/^(\d+(?: \d+\/\d+)?|\d+\/\d+) lb$/);
+        if (pounds) {
+          return { single: { amount: pounds[1], unit: "lb" } };
+        }
+        const terms = [...text.matchAll(/(\d+(?: \d+\/\d+)?|\d+\/\d+)\s+(cups?|tbsp|tsp)\b/g)];
+        if (terms.length === 0 || terms.map((term) => term[0]).join(" ") !== text) {
+          return null;
+        }
+        let tsp = 0;
+        const units = terms.map(([, amount, rawUnit]) => {
+          const unit = rawUnit.startsWith("cup") ? "cup" : rawUnit;
+          tsp += Number.parseFloat(normalizeFractionsInLine(amount)) * TSP_PER[unit];
+          return unit;
+        });
+        return {
+          tsp,
+          single: terms.length === 1 ? { amount: terms[0][1], unit: units[0] } : null
+        };
+      };
+
+      const low = parse(lowText);
+      const high = parse(highText);
+      if (!low || !high) {
+        return `${lowText} - ${highText}`;
+      }
+
+      // Same single unit at both ends: "1 - 2 tsp", "1/3 - 1/2 cup", "5 - 6 lb".
+      if (low.single && high.single && low.single.unit === high.single.unit) {
+        return `${low.single.amount} - ${highText}`;
+      }
+
+      // Otherwise, if both ends fit one spoon exactly, use it: "6 - 8 tbsp",
+      // "2 - 4 tsp" (instead of "2 tsp - 1 tbsp 1 tsp").
+      if (low.tsp && high.tsp) {
+        for (const [unit, step, max] of [["tbsp", 0.5, 16], ["tsp", 0.25, 12]]) {
+          const inUnit = (tsp) => {
+            const value = tsp / TSP_PER[unit];
+            const rounded = Math.round(value / step) * step;
+            return Math.abs(rounded - value) < 1e-6 && rounded <= max ? decimalToFraction(rounded) : null;
+          };
+          const lowAmount = inUnit(low.tsp);
+          const highAmount = inUnit(high.tsp);
+          if (lowAmount && highAmount) {
+            return `${lowAmount} - ${highAmount} ${unit}`;
+          }
+        }
+      }
+
+      return `${lowText} - ${highText}`;
+    }
+
     function convertParsedIngredient(parsed, multiplier) {
       if (parsed.isRange) {
         const lowResult = convertAmountToText(
@@ -1695,7 +1829,7 @@
           : ` ${parsed.ingredient}`;
 
         return {
-          text: `${prefixPart}${lowResult.text} - ${highResult.text}${ingredientPart}`,
+          text: `${prefixPart}${joinRange(lowResult.text, highResult.text)}${ingredientPart}`,
           approximate: lowResult.approximate || highResult.approximate,
           isFullLine: true
         };

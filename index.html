@@ -1044,6 +1044,12 @@
     // bare metric weight mentions like ", 425g" (not in parentheses), and any
     // leftover trailing punctuation, so the output ingredient name is clean.
     function cleanIngredientName(text) {
+      // A "(for the pan sauce)" note tells two lines of the same ingredient
+      // apart, so it stays (shortened to "(for pan sauce)"); other notes go.
+      const purposeMatch = text.match(/\(\s*(for\s+[^)]*?)\s*\)/i);
+      const purpose = purposeMatch
+        ? ` (${purposeMatch[1].replace(/^for\s+(?:the|a|an)\s+/i, "for ")})`
+        : "";
       let result = text.replace(/\([^)]*\)/g, "");
 
       const trailingMetricWeight =
@@ -1069,7 +1075,7 @@
           .replace(/\s{2,}/g, " ")
           .replace(/[,;:\-–]+$/, "")
           .trim()
-      );
+      ) + purpose;
     }
 
     // Brand names add nothing when you're measuring
@@ -1098,8 +1104,9 @@
 
     // A single describing word before the first comma belongs to the name:
     // "aged, coarsely grated Parmesan" is one ingredient, not "aged" + a note.
+    // Hyphenated ones count too ("Bone-in, skin-on chicken thighs").
     const LEADING_DESCRIPTOR =
-      /^(?:aged|fresh|large|small|medium|whole|raw|ripe|dry|frozen|boneless|skinless|extra|light|dark|sweet|sharp|mild|plain|organic|hot|cold|warm|[a-z]{3,}ed)$/i;
+      /^(?:aged|fresh|large|small|medium|whole|raw|ripe|dry|frozen|boneless|skinless|extra|light|dark|sweet|sharp|mild|plain|organic|hot|cold|warm|[a-z]{3,}ed|[a-z]+(?:-[a-z]+)+)$/i;
 
     // Shortens an ingredient name to what you need when you're busy cooking:
     // the ingredient plus at most a prep word. Removes brand names, moves a
@@ -1133,9 +1140,10 @@
         .filter((note) => MOVABLE_PREP.has(note));
 
       if (prefixes.length > 0) {
-        // Keep a size word first, the way recipes say it:
-        // "large onion" + "grated" -> "large grated onion".
-        const sized = result.match(/^((?:extra[\s-])?(?:small|medium|large)|jumbo|big)\s+(.+)$/i);
+        // Keep a size word or a "cloves"-type count word first, the way
+        // recipes say it: "large onion" + "grated" -> "large grated onion",
+        // "cloves garlic" + "minced" -> "cloves minced garlic".
+        const sized = result.match(/^((?:extra[\s-])?(?:small|medium|large)|jumbo|big|cloves?|sprigs?|stalks?|heads?|bunch(?:es)?)\s+(.+)$/i);
         result = sized
           ? `${sized[1]} ${prefixes.join(" ")} ${sized[2]}`
           : `${prefixes.join(" ")} ${result}`;
@@ -1325,35 +1333,35 @@
     // weight converts into. Returns null when there's no such friendly
     // parenthetical, e.g. "(210 g)", "(optional)", "(1 inch pieces)".
     function friendlyAmountFromParentheses(line) {
-      const parenMatch = line.match(/\(([^)]*)\)/);
-      if (!parenMatch) {
+      const candidates = [...line.matchAll(/\(([^)]*)\)/g)]
+        .map((match) =>
+          match[1]
+            .trim()
+            .replace(/^(?:about|approx\.?|approximately|roughly|around|~)\s*/i, "")
+        )
+        .filter(
+          (inner) =>
+            // Must start with a number or fraction to be a usable amount.
+            /^(?:\d|[¼½¾⅓⅔⅛⅜⅝⅞])/.test(inner) &&
+            // Skip a parenthetical whose amount is metric — e.g. "(210 g)" or
+            // "(210 g stick)" — converting it gains nothing over the weight
+            // it already sits beside.
+            !/^\d+(?:[.,]\d+)?\s*(?:g|grams?|kg|kgs?|kilograms?|ml|milliliters?|millilitres?|l|liters?|litres?)\b/i.test(inner) &&
+            // Skip size/time notes like "(1 inch pieces)" or "(2 minutes)".
+            !/^\d+(?:[.,]\d+)?\s*(?:inch|inches|in|cm|mm|ft|feet|foot|minutes?|mins?|hours?|hrs?|seconds?|secs?|degrees?|days?|weeks?)\b/i.test(inner)
+        );
+      if (candidates.length === 0) {
         return null;
       }
 
-      const inner = parenMatch[1]
-        .trim()
-        .replace(/^(?:about|approx\.?|approximately|roughly|around|~)\s*/i, "");
-
-      // Must start with a number or fraction to be a usable amount.
-      if (!/^(?:\d|[¼½¾⅓⅔⅛⅜⅝⅞])/.test(inner)) {
-        return null;
-      }
-
-      // Skip a parenthetical whose amount is metric — e.g. "(210 g)" or
-      // "(210 g stick)" — converting it gains nothing over the weight it
-      // already sits beside.
-      if (
-        /^\d+(?:[.,]\d+)?\s*(?:g|grams?|kg|kgs?|kilograms?|ml|milliliters?|millilitres?|l|liters?|litres?)\b/i.test(inner)
-      ) {
-        return null;
-      }
-
-      // Skip size/time notes like "(1 inch pieces)" or "(2 minutes)".
-      if (
-        /^\d+(?:[.,]\d+)?\s*(?:inch|inches|in|cm|mm|ft|feet|foot|minutes?|mins?|hours?|hrs?|seconds?|secs?|degrees?|days?|weeks?)\b/i.test(inner)
-      ) {
-        return null;
-      }
+      // A count beats a pound weight: "900 g (2 lb) chicken thighs (about 4
+      // thighs)" is easier as "4 chicken thighs".
+      const isWeight = (inner) => /^[\d.,\/\s¼½¾⅓⅔⅛⅜⅝⅞–-]+\s*(?:lbs?|pounds?|oz|ounces?)\b/i.test(inner);
+      const isCount = (inner) =>
+        /^[\d.,\/\s¼½¾⅓⅔⅛⅜⅝⅞–-]+\s*[a-z]+(?:\s+[a-z]+)?$/i.test(inner) &&
+        !/^[\d.,\/\s¼½¾⅓⅔⅛⅜⅝⅞–-]+\s*(?:cups?|c|tbsps?|tablespoons?|tsps?|teaspoons?|t|sticks?|pints?|quarts?|qts?|gallons?|fl|lbs?|pounds?|oz|ounces?)\b/i.test(inner);
+      const inner =
+        (isWeight(candidates[0]) && candidates.find(isCount)) || candidates[0];
 
       // Ingredient text outside the parentheses. Remove the parentheses, then
       // peel off every leading "amount unit" measure — metric or US weight,
@@ -1365,7 +1373,8 @@
           "litres?|lbs?|pounds?|oz|ounces?)\\b\\.?",
         "i"
       );
-      let outside = line.replace(/\([^)]*\)/g, " ");
+      // A "(for the pan sauce)" note stays so the name cleanup can keep it.
+      let outside = line.replace(/\((?!\s*for\s)[^)]*\)/gi, " ");
       let previousOutside;
       do {
         previousOutside = outside;
@@ -1373,9 +1382,25 @@
       } while (outside !== previousOutside);
       outside = outside.replace(/\s{2,}/g, " ").trim();
 
+      // A count whose noun is already in the name ("4 thighs" + "Bone-in,
+      // skin-on chicken thighs") only needs its number: "4 Bone-in, ...".
+      let amount = inner;
+      const countNoun = inner.match(/^(.*\S)\s+([a-z]{3,}?)(?:e?s)?$/i);
+      // Ignore "cut into large wedges"-style notes when looking for it.
+      const outsideName = outside.replace(/\b(?:cut\s+)?(?:into|in)\s.*$/i, "");
+      if (
+        countNoun &&
+        isCount(inner) &&
+        !/^(?:small|medium|large|big|jumbo|whole|ripe)$/i.test(countNoun[2]) &&
+        !new RegExp(`^${countNoun[2]}`, "i").test(outsideName) &&
+        new RegExp(`\\b${countNoun[2]}(?:e?s)?\\b`, "i").test(outsideName)
+      ) {
+        amount = countNoun[1];
+      }
+
       // Combine, then collapse an immediately repeated word so
       // "1 large onion" + "onion, grated" reads as "1 large onion, grated".
-      return `${inner} ${outside}`
+      return `${amount} ${outside}`
         .replace(/\s{2,}/g, " ")
         .trim()
         .replace(/\b(\w+)\s+\1\b/gi, "$1");
@@ -1389,8 +1414,8 @@
     // oven's "260C" stays Celsius.
     function expandTeaspoonTablespoonShorthand(text) {
       return text
-        .replace(/(\d)\s*T\b/g, "$1 tbsp")
-        .replace(/(\d)\s*t\b/g, "$1 tsp")
+        .replace(/([\d¼½¾⅓⅔⅛⅜⅝⅞])\s*T\b/g, "$1 tbsp")
+        .replace(/([\d¼½¾⅓⅔⅛⅜⅝⅞])\s*t\b/g, "$1 tsp")
         // Before the amount: start of line, a non-digit, or a "/" that follows
         // a letter ("500g/4c" — a separator), but not one that follows a digit
         // ("3/4C" — that's a fraction, matched whole instead).

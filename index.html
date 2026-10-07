@@ -501,6 +501,23 @@
         sessionStorage.setItem(MULTIPLIER_KEY, multiplierInput.value);
       } catch {
       }
+      rememberMultiplierInHistory(multiplierInput.value);
+    }
+
+    // A second copy of the multiplier lives in this tab's history entry. When
+    // iOS reloads a tab that sat in the background it can wipe sessionStorage
+    // while Safari still restores the text boxes — that's how the recipe used
+    // to come back with the multiplier reset to 1. The history entry survives
+    // that reload, is invisible, and isn't shared with new tabs.
+    function rememberMultiplierInHistory(value) {
+      try {
+        const state = history.state || {};
+        // Only write on a real change: Safari limits how often this can run.
+        if (state.kitchenCalMultiplier !== value) {
+          history.replaceState({ ...state, kitchenCalMultiplier: value }, "");
+        }
+      } catch {
+      }
     }
 
     // Lowest multiplier the ÷8 shortcut needs (1/8 = 0.125), with a little
@@ -1175,9 +1192,14 @@
       );
 
       // (c) Spaced range — "...water 3 -4 tablespoons sugar". A number range
-      //     mid-line almost always starts a new ingredient.
+      //     mid-line almost always starts a new ingredient — unless it's a
+      //     time or size ("350F fan 10-20 mins", "cut 2-3 inch pieces").
       out = out.replace(
-        new RegExp("([A-Za-z,])[^\\S\\r\\n]+(\\d+(?:[.,]\\d+)?\\s*[-–]\\s*\\d+)", "g"),
+        new RegExp(
+          "([A-Za-z,])[^\\S\\r\\n]+(\\d+(?:[.,]\\d+)?\\s*[-–]\\s*\\d+)(?!\\d)" +
+            "(?![^\\S\\r\\n]*" + DIM + "\\b)",
+          "g"
+        ),
         "$1\n$2"
       );
 
@@ -1396,9 +1418,23 @@
         return { passthrough: true, originalLine: cleanedLine };
       }
 
-      // Oven temps / bake notes like "375F fan, light golden brown" aren't
-      // ingredient amounts either — pass them through unchanged too.
-      if (/^\d+\s?°?\s?(?:F|C)\b/i.test(cleanedLine)) {
+      // Oven temperatures, cooking times and sizes must never be scaled:
+      // "350F fan 10-20 mins", "Bake 25 minutes at 180°C", "cut into 2-3 inch
+      // pieces", "9-inch pie dish". A line passes through unchanged when its
+      // FIRST number is one of these, so "1 cup rice, soaked 30 minutes" still
+      // scales (its first number is the rice). A temperature needs a ° sign or
+      // 3 digits ("350F", "180 C"), so "2 c sugar" isn't mistaken for 2°C.
+      const firstNumber = "^[^\\d]*\\d+(?:[.,]\\d+)?(?:\\s*[-–]\\s*\\d+(?:[.,]\\d+)?)?\\s*";
+      const startsWithTime = new RegExp(
+        firstNumber + "(?:min(?:ute)?s?|hours?|hrs?|sec(?:ond)?s?)\\b", "i"
+      ).test(cleanedLine);
+      const startsWithSize = new RegExp(
+        firstNumber + "-?\\s*(?:inch(?:es)?|cm|mm|centimet(?:er|re)s?|millimet(?:er|re)s?)\\b", "i"
+      ).test(cleanedLine);
+      const startsWithTemperature =
+        /^[^\d]*\d{3}\s*°?\s*[FC]\b/i.test(cleanedLine) ||
+        /^[^\d]*\d+\s*°\s*[FC]\b/i.test(cleanedLine);
+      if (startsWithTime || startsWithSize || startsWithTemperature) {
         return { passthrough: true, originalLine: cleanedLine };
       }
 
@@ -1900,6 +1936,7 @@
         sessionStorage.removeItem(MULTIPLIER_KEY);
       } catch {
       }
+      rememberMultiplierInHistory(null);
 
       recipeInput.focus();
     }
@@ -2406,21 +2443,37 @@
       } catch {
       }
 
-      // Restore this tab's recipe on a refresh. sessionStorage is empty in a
-      // brand-new tab, so new tabs still open fresh at multiplier 1.
+      // Restore this tab's recipe and multiplier after a refresh, or after iOS
+      // reloads a tab that sat in the background. A brand-new tab has none of
+      // this saved, so it still opens fresh at multiplier 1.
       let savedRecipe = "";
-      let savedMultiplier = "1";
+      let savedMultiplier = null;
       try {
         savedRecipe = sessionStorage.getItem(RECIPE_KEY) || "";
-        savedMultiplier = sessionStorage.getItem(MULTIPLIER_KEY) || "1";
+        savedMultiplier = sessionStorage.getItem(MULTIPLIER_KEY);
       } catch {
       }
 
-      multiplierInput.value = savedMultiplier || "1";
+      // If iOS wiped sessionStorage, fall back to the copy in this tab's
+      // history entry. Never force 1 here — if nothing was saved, keep whatever
+      // the box already shows (Safari may have restored it itself).
+      if (!savedMultiplier) {
+        try {
+          savedMultiplier = history.state && history.state.kitchenCalMultiplier;
+        } catch {
+        }
+      }
+      if (savedMultiplier) {
+        multiplierInput.value = savedMultiplier;
+      }
 
-      if (savedRecipe) {
-        recipeInput.value = savedRecipe;
+      // Same for the recipe: use the saved copy, or the text Safari restored.
+      const recipe = savedRecipe || recipeInput.value;
+      if (recipe.trim()) {
+        recipeInput.value = recipe;
         autoGrowTextarea(recipeInput);
+        // Re-convert so the result always matches the multiplier shown, and
+        // re-save both in case storage had been wiped.
         convertRecipe();
       }
     })();

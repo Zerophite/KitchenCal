@@ -1120,6 +1120,37 @@
     const LEADING_DESCRIPTOR =
       /^(?:aged|fresh|large|small|medium|whole|raw|ripe|dry|frozen|boneless|skinless|extra|light|dark|sweet|sharp|mild|plain|organic|hot|cold|warm|[a-z]{3,}ed|[a-z]+(?:-[a-z]+)+)$/i;
 
+    // "cut into large 4cm / 1.6" cubes" -> ', 1 1/2" cubes'. Always in inches
+    // (rounded to a quarter inch); a cm-only size is converted.
+    function pieceSizeNote(text) {
+      const NUMBER = "(?:(?:\\d+\\s+)?\\d+(?:[.\\/]\\d+)?|[¼½¾⅓⅔⅛])";
+      const LENGTH = `${NUMBER}(?:\\s*[-–]\\s*${NUMBER})?`;
+      const UNIT = "(?:[\"”″]|-?\\s*inch(?:es)?\\b|\\s?cm\\b|\\s?mm\\b)";
+      const match = text.match(new RegExp(
+        "\\b(?:cut|chopped|diced|sliced)\\s+(?:in|into)\\s+" +
+          "(?:(?:about|roughly|approx\\.?|large|small|medium|bite-size|equal|~)\\s+)*" +
+          `(${LENGTH}\\s*${UNIT})(?:\\s*\\/\\s*(${LENGTH}\\s*${UNIT}))?\\s*([a-z]+)?`,
+        "i"
+      ));
+      if (!match) {
+        return "";
+      }
+
+      const isInches = (size) => /["”″]|inch/i.test(size);
+      const size = [match[1], match[2]].find((part) => part && isInches(part)) || match[1];
+      const perInch = /mm/i.test(size) ? 25.4 : isInches(size) ? 1 : 2.54;
+      const inches = size
+        .replace(/[a-z"”″]/gi, "")
+        .split(/\s*[-–]\s*/)
+        .map((end) => {
+          const value = Number.parseFloat(normalizeFractionsInLine(end.trim())) / perInch;
+          return decimalToFraction(Math.max(0.25, Math.round(value * 4) / 4));
+        });
+      const shape = /^(?:pieces?|cubes?|chunks?|slices?|lengths?|squares?|strips?|wedges?|rounds?|rings?|batons?|sticks?|dice)$/i
+        .test(match[3] || "") ? ` ${match[3]}` : "";
+      return `, ${inches.join("-")}"${shape}`;
+    }
+
     // Shortens an ingredient name to what you need when you're busy cooking:
     // the ingredient plus at most a prep word. Removes brand names, moves a
     // lone prep note to the front ("carrots, grated" -> "grated carrots"), and
@@ -1138,17 +1169,19 @@
         // A spaced dash starts a note just like a comma does:
         // "beef chuck - trimmed of fat" = "beef chuck, trimmed of fat".
         .replace(/\s+[-–—]\s+/g, ", ")
+        // A substitute is a different ingredient — its notes (and any cut
+        // size) don't belong to this one: "Thai basil, substitute regular
+        // basil or green onion cut into 5cm lengths" -> "Thai basil".
+        .replace(/[,;]?\s*\b(?:substitute|subs?|can sub|can omit)\b.*$/i, "")
+        .replace(/\s*\b(?:if you can find (?:it|them)|if available|if you have (?:it|them))\b/gi, "")
+        // "chicken stock/broth" is one thing.
+        .replace(/\bstock\s*\/\s*broth\b/gi, "broth")
         .replace(/\s{2,}/g, " ")
         .trim();
 
       // The piece size is worth keeping for stews and the like ("cut into
       // 2" cubes" -> "2" cubes"); a vague "large wedges" is not.
-      const sizeMatch = withoutBrand.match(
-        /\b(?:cut|chopped|diced|sliced)\s+(?:in|into)\s+(?:about\s+)?((?:\d+(?:[.\/]\d+)?|[¼½¾⅓⅔⅛])(?:\s*[-–]\s*(?:\d+(?:[.\/]\d+)?|[¼½¾⅓⅔⅛]))?\s*(?:["”″]|-?\s*inch(?:es)?\b|\s?cm\b)\s*[a-z]*)/i
-      );
-      const sizeNote = sizeMatch
-        ? `, ${sizeMatch[1].replace(/[”″]/g, '"').replace(/\s*-?\s*inch(?:es)?\b/i, '"').trim()}`
-        : "";
+      const sizeNote = pieceSizeNote(withoutBrand);
 
       // Never strip a name down to nothing (e.g. just "Philadelphia").
       const base = (/[a-z]/i.test(withoutBrand) ? withoutBrand : name)
@@ -1169,6 +1202,15 @@
       }
 
       let result = (parts[0] || base).replace(NAME_ADVERBS, "");
+
+      // A long list of swaps — "Chinese cooking wine or Taiwanese rice wine,
+      // or chicken broth" — keeps the first and the last (usually the
+      // easy-to-find fallback): "Chinese cooking wine or chicken broth".
+      const lastSwap = parts.slice(1).reverse().find((note) => /^or\s+\S/i.test(note));
+      if (lastSwap && /\s+or\s+/i.test(result)) {
+        result = `${result.split(/\s+or\s+/i)[0]} or ${lastSwap.replace(/^or\s+/i, "")}`;
+      }
+
       const prefixes = parts
         .slice(1)
         .map((note) => note.toLowerCase().replace(NOTE_QUALIFIERS, "").trim())
@@ -1252,8 +1294,23 @@
       const endsWithAlternative = /(?:\bor|\/)\s*$/i;
       const startsWithAmount = /^\s*(?:\d|[¼½¾⅓⅔⅛⅜⅝⅞])/;
 
+      // "1 1/2 tbsp minced garlic ," + "5 – 6 cloves (yes, lots!)": the second
+      // line is the same garlic as a count. A count is easier, so it becomes
+      // one line, "5 – 6 cloves minced garlic", instead of garlic twice.
+      const countOnly =
+        /^\s*(?:[▢☐□•·▪*-]\s*)?(\d+(?:\s*[-–]\s*\d+)?)\s+(cloves?|stalks?|sprigs?|sticks?)\b([^a-z]*(?:\([^)]*\))?\s*)$/i;
+      const measuredName =
+        /^\s*(?:[▢☐□•·▪*-]\s*)?[\d.,/\s¼½¾⅓⅔⅛⅜⅝⅞–-]+\s*(?:cups?|tbsps?|tablespoons?|tsps?|teaspoons?|grams?|g)\b\.?\s*(?:of\s+)?(.+?)\s*,\s*$/i;
+
       for (let i = 0; i < lines.length; i += 1) {
         const next = lines[i + 1];
+        const measured = lines[i].match(measuredName);
+        const count = next !== undefined && next.match(countOnly);
+        if (measured && count) {
+          out.push(`${count[1]} ${count[2]} ${measured[1]}`);
+          i += 1;
+          continue;
+        }
         const isDangling =
           amountOnly.test(lines[i]) ||
           (endsWithAlternative.test(lines[i]) && next !== undefined && startsWithAmount.test(next));
@@ -2024,14 +2081,30 @@
       }
 
       const resizedAmount = parsed.amount * multiplier;
+      const name = scaleSwapAmounts(parsed.ingredient, multiplier);
       if (parsed.unit === "count") {
         return {
-          text: `${formatCount(resizedAmount)} ${matchCountToAmount(parsed.ingredient, resizedAmount)}`,
+          text: `${formatCount(resizedAmount)} ${matchCountToAmount(name, resizedAmount)}`,
           approximate: false,
           isFullLine: true
         };
       }
-      return convertAmountToText(parsed.unit, resizedAmount, parsed.ingredient);
+      const converted = convertAmountToText(parsed.unit, resizedAmount, parsed.ingredient);
+      return { ...converted, text: `${converted.text} ${name}`, isFullLine: true };
+    }
+
+    // The swap in "3 sprigs fresh thyme or 1/2 tsp dried thyme" is resized
+    // too, so x4 reads "12 sprigs fresh thyme or 2 tsp dried thyme".
+    function scaleSwapAmounts(name, multiplier) {
+      return name.replace(
+        /\bor\s+((?:\d+\s+)?\d+\/\d+|\d+(?:\.\d+)?)\s+(cups?|tbsps?|tablespoons?|tsps?|teaspoons?)\b/gi,
+        (whole, amount, unit) => {
+          const value = Number.parseFloat(normalizeFractionsInLine(amount));
+          return Number.isFinite(value)
+            ? `or ${convertAmountToText(normalizeUnit(unit), value * multiplier, "").text}`
+            : whole;
+        }
+      );
     }
 
     // Things you count, so "1 large egg" x2 reads "2 large eggs" (and
@@ -2041,7 +2114,8 @@
       "orange", "apple", "pear", "banana", "avocado", "potato", "tomato",
       "pepper", "chili", "chile", "jalapeño", "jalapeno", "cucumber", "clove",
       "leaf", "sprig", "stalk", "head", "can", "thigh", "breast", "drumstick",
-      "fillet", "steak", "tortilla", "wrapper", "bun", "date", "fig"
+      "fillet", "steak", "tortilla", "wrapper", "bun", "date", "fig", "cube",
+      "chilli"
     ];
 
     // When the name starts with one of these, that's the word you count:
@@ -2067,8 +2141,8 @@
         return `${replacement}${name.slice(firstWord[1].length)}`;
       }
 
-      // Leave any "(for pan sauce)" note at the end alone.
-      const [, main, note] = name.match(/^(.*?)(\s*\([^)]*\))?$/);
+      // Leave any "(for pan sauce)" or ', 1/2" slices' note at the end alone.
+      const [, main, note] = name.match(/^(.*?)((?:\s*\([^)]*\)|,.*)*)$/);
       const lastWord = main.match(/([A-Za-zñ]+)$/);
       if (!lastWord) {
         return name;

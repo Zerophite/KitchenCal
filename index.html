@@ -1047,9 +1047,12 @@
       // A "(for the pan sauce)" note tells two lines of the same ingredient
       // apart, so it stays (shortened to "(for pan sauce)"); other notes go.
       const purposeMatch = text.match(/\(\s*(for\s+[^)]*?)\s*\)/i);
-      const purpose = purposeMatch
-        ? ` (${purposeMatch[1].replace(/^for\s+(?:the|a|an)\s+/i, "for ")})`
-        : "";
+      // "optional" is worth saying — you may skip buying it.
+      const purpose =
+        (/\boptional\b/i.test(text) ? " (optional)" : "") +
+        (purposeMatch
+          ? ` (${purposeMatch[1].replace(/^for\s+(?:the|a|an)\s+/i, "for ")})`
+          : "");
       // A can/jar size is what you shop by, so "can (14 oz) tomatoes" keeps
       // its "(14 oz)" — it says which can, not how much to measure.
       const containerMatch = text.match(
@@ -1125,6 +1128,13 @@
     function simplifyIngredientName(name) {
       const withoutBrand = name
         .replace(BRAND_NAMES, " ")
+        // Australian/UK name given with its US one — keep the US name:
+        // "red capsicum / bell pepper" -> "red bell pepper",
+        // "cooking salt / kosher salt" -> "kosher salt".
+        .replace(
+          /\b(?:capsicums?|cooking salt|caster sugar|icing sugar|plain flour|self[\s-]raising flour|bicarb(?:onate)?(?: of)? soda|cornflour|spring onions?|coriander leaves|minced beef|beef mince|pork mince|prawns?|rocket|aubergines?|courgettes?)\s*\/\s*/gi,
+          ""
+        )
         // A spaced dash starts a note just like a comma does:
         // "beef chuck - trimmed of fat" = "beef chuck, trimmed of fat".
         .replace(/\s+[-–—]\s+/g, ", ")
@@ -1964,6 +1974,34 @@
       return `${lowText} - ${highText}`;
     }
 
+    // A "(for pan sauce)" note is only there to tell two lines of the same
+    // ingredient apart. When the ingredient appears once, the note is just
+    // extra reading ("cayenne pepper (for faint spiciness)"), so it goes.
+    function dropUnneededPurposeNotes(parsedLines) {
+      const PURPOSE = /\s*\(for [^)]*\)$/i;
+      const field = (parsed) =>
+        parsed && !parsed.passthrough && !parsed.error
+          ? (parsed.isRange && parsed.rangeUnit === "count" ? "suffixText" : "ingredient")
+          : null;
+      const baseName = (name) =>
+        name.replace(PURPOSE, "").replace(/\s*\(optional\)$/i, "").toLowerCase().trim();
+
+      const counts = new Map();
+      for (const parsed of parsedLines) {
+        const key = field(parsed);
+        if (key && parsed[key]) {
+          const name = baseName(parsed[key]);
+          counts.set(name, (counts.get(name) || 0) + 1);
+        }
+      }
+      for (const parsed of parsedLines) {
+        const key = field(parsed);
+        if (key && parsed[key] && PURPOSE.test(parsed[key]) && counts.get(baseName(parsed[key])) < 2) {
+          parsed[key] = parsed[key].replace(PURPOSE, "");
+        }
+      }
+    }
+
     function convertParsedIngredient(parsed, multiplier) {
       if (parsed.isRange) {
         const lowResult = convertAmountToText(
@@ -2085,13 +2123,14 @@
       const unrecognizedLines = [];
       let usedApproximateCupConversion = false;
 
-      for (const line of lines) {
-        if (!line.trim()) {
+      const parsedLines = lines.map((line) => (line.trim() ? parseRecipeLine(line) : ""));
+      dropUnneededPurposeNotes(parsedLines);
+
+      for (const parsed of parsedLines) {
+        if (parsed === "") {
           convertedLines.push("");
           continue;
         }
-
-        const parsed = parseRecipeLine(line);
 
         if (!parsed) {
           continue;
@@ -2150,8 +2189,16 @@
     const SCALE_UNIT_LABELS = {
       cup: "cups", tbsp: "tbsp", tsp: "tsp",
       g: "g", kg: "kg", ml: "ml", l: "L",
-      lb: "lb", pint: "pints", quart: "quarts", gallon: "gallons", fl_oz: "fl oz"
+      lb: "lb", pint: "pints", quart: "quarts", gallon: "gallons", fl_oz: "fl oz",
+      count: ""
     };
+
+    // The main protein is what you size a savoury dish by ("I have 3 chicken
+    // thighs"). Stocks, sauces and powders made from meat don't count.
+    const MAIN_MEAT =
+      /\b(?:chicken|beef|pork|lamb|mutton|goat|veal|turkey|duck|thighs?|drumsticks?|breasts?|wings?|chuck|brisket|steaks?|ribs?|roast|loin|tenderloin|shoulder|mince|ground (?:beef|pork|turkey|chicken|lamb)|sausages?|meatballs?|fish|salmon|tuna|cod|tilapia|fillets?|shrimps?|prawns?|scallops?|mussels?|clams?|crab|lobster|squid|tofu)\b/i;
+    const NOT_MAIN_MEAT =
+      /\b(?:stock|broth|bouillon|sauce|powder|fat|drippings|gelatin|paste|seasoning|bacon|pancetta|lardons?|chorizo|anchov(?:y|ies))\b/i;
 
     let scaleReference = null;
 
@@ -2168,6 +2215,8 @@
       );
 
       let firstScalable = null;
+      let firstMeat = null;
+      let firstFlour = null;
 
       for (const line of processed.split(/\r?\n/)) {
         if (!line.trim()) {
@@ -2191,20 +2240,33 @@
         const candidate = {
           amount: parsed.amount,
           unit: parsed.unit,
-          ingredient: parsed.ingredient
+          // Just the name for the label: "beef chuck", not "beef chuck, 2" cubes".
+          ingredient: parsed.ingredient.replace(/\s*\(.*$/, "").replace(/,.*$/, "").trim()
         };
 
         // For baking, flour is what you size a batch by — anchor on it
         // whenever the recipe has any, even if it isn't listed first.
-        if (/flour/i.test(parsed.ingredient)) {
-          return candidate;
+        if (!firstFlour && /flour/i.test(parsed.ingredient)) {
+          firstFlour = candidate;
         }
 
-        if (!firstScalable) {
+        // For cooking, the main meat wins over everything — a stew's flour
+        // is only there to thicken ("5 chicken thighs", "3 lb beef chuck").
+        if (
+          !firstMeat &&
+          MAIN_MEAT.test(parsed.ingredient) &&
+          !NOT_MAIN_MEAT.test(parsed.ingredient)
+        ) {
+          firstMeat = candidate;
+        }
+
+        // A plain count ("2 large eggs", "1 onion") is only worth anchoring
+        // on when it's the meat.
+        if (!firstScalable && parsed.unit !== "count") {
           firstScalable = candidate;
         }
       }
-      return firstScalable;
+      return firstMeat || firstFlour || firstScalable;
     }
 
     function formatScaleValue(value) {

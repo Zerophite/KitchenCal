@@ -546,6 +546,12 @@
 
       { names: ["rolled oats", "oats"], gramsPerCup: 90 },
       { names: ["almond flour", "almond meal"], gramsPerCup: 96 },
+      // Coconut milk and oil come before dry "coconut", which used to turn
+      // 400 g of coconut milk into 4 3/4 cups.
+      { names: ["coconut milk", "coconut cream"], gramsPerCup: 240 },
+      { names: ["olive oil", "vegetable oil", "canola oil", "sesame oil", "coconut oil",
+        "peanut oil", "avocado oil", "sunflower oil", "neutral oil", "cooking oil", "plain oil"],
+        gramsPerCup: 218 },
       { names: ["desiccated coconut", "shredded coconut", "coconut"], gramsPerCup: 85 },
 
       { names: ["chocolate chips", "choc chips"], gramsPerCup: 170 },
@@ -575,6 +581,17 @@
       { names: ["worcestershire sauce", "worcestershire"], gramsPerCup: 240 },
       { names: ["hot sauce"], gramsPerCup: 213 },
       { names: ["apple cider vinegar", "cider vinegar", "vinegar"], gramsPerCup: 213 },
+      // Asian sauces are heavier than water (salt and sugar), so a gram
+      // weight is a little less volume than the same weight of water.
+      { names: ["fish sauce"], gramsPerCup: 288 },
+      { names: ["soy sauce", "light soy", "dark soy", "tamari", "shoyu"], gramsPerCup: 272 },
+      { names: ["oyster sauce", "hoisin sauce", "hoisin"], gramsPerCup: 296 },
+      { names: ["mirin"], gramsPerCup: 272 },
+      // Brands vary from runny to thick, so it rounds like a guess.
+      { names: ["tamarind concentrate", "tamarind paste", "tamarind pulp", "tamarind"],
+        gramsPerCup: 300, rough: true },
+      { names: ["tomato paste"], gramsPerCup: 256 },
+      { names: ["lemon juice", "lime juice", "orange juice", "juice"], gramsPerCup: 244 },
 
       { names: ["grated ginger", "minced ginger", "fresh ginger", "ginger"], gramsPerCup: 96 },
       { names: ["grated garlic", "minced garlic", "garlic"], gramsPerCup: 144 },
@@ -585,6 +602,10 @@
       { names: ["cream cheese"], gramsPerCup: 227 },
       { names: ["yogurt", "yoghurt"], gramsPerCup: 245 },
       { names: ["sour cream"], gramsPerCup: 240 },
+      { names: ["cream of tartar"], gramsPerCup: 144 },
+      { names: ["heavy cream", "whipping cream", "double cream", "single cream", "cream"], gramsPerCup: 238 },
+      { names: ["sweetened condensed milk", "condensed milk"], gramsPerCup: 306 },
+      { names: ["evaporated milk"], gramsPerCup: 252 },
 
       // Thin liquids weigh about the same as water (1 cup ~= 237 g), so their
       // gram weights convert straight to cups instead of an awkward pound.
@@ -592,7 +613,8 @@
       { names: ["chicken stock", "vegetable stock", "beef stock", "stock", "broth"], gramsPerCup: 237 },
       { names: ["water"], gramsPerCup: 237 },
 
-      { names: ["honey"], gramsPerCup: 340 },
+      { names: ["honey", "golden syrup"], gramsPerCup: 340 },
+      { names: ["corn syrup"], gramsPerCup: 328 },
       { names: ["maple syrup"], gramsPerCup: 315 },
       { names: ["molasses", "treacle"], gramsPerCup: 337 },
 
@@ -920,6 +942,18 @@
       // wouldn't be practical anyway.
       const WATER_GRAMS_PER_CUP = 236.588;
       const BULK_THRESHOLD_GRAMS = 200;
+
+      // Anything you pour is measured in cups, however much of it there is —
+      // nobody weighs out "2/3 lb" of a sauce. Judged by the last word, so
+      // "oil-packed sun-dried tomatoes" isn't taken for oil.
+      const POURED =
+        /\b(?:sauce|juice|concentrate|syrup|vinegar|wine|oil|milk|cream|stock|broth|puree|purée|extract|beer|sake|mirin|water|paste|dressing|marinade|liqueur|liquor|rum|brandy|whiskey|vodka|nectar|kecap manis)$/i;
+      if (grams > 0 && POURED.test(ingredientName.replace(/\s*[(,].*$/, "").trim())) {
+        return {
+          text: cupsToFriendlyUS(grams / 250, ROUNDING.guessedWeight),
+          approximate: true
+        };
+      }
 
       if (grams > 0 && grams < BULK_THRESHOLD_GRAMS) {
         return {
@@ -2264,7 +2298,7 @@
       cup: "cups", tbsp: "tbsp", tsp: "tsp",
       g: "g", kg: "kg", ml: "ml", l: "L",
       lb: "lb", pint: "pints", quart: "quarts", gallon: "gallons", fl_oz: "fl oz",
-      count: ""
+      oz: "oz", count: ""
     };
 
     // The main protein is what you size a savoury dish by ("I have 3 chicken
@@ -2273,6 +2307,32 @@
       /\b(?:chicken|beef|pork|lamb|mutton|goat|veal|turkey|duck|thighs?|drumsticks?|breasts?|wings?|chuck|brisket|steaks?|ribs?|roast|loin|tenderloin|shoulder|mince|ground (?:beef|pork|turkey|chicken|lamb)|sausages?|meatballs?|fish|salmon|tuna|cod|tilapia|fillets?|shrimps?|prawns?|scallops?|mussels?|clams?|crab|lobster|squid|tofu)\b/i;
     const NOT_MAIN_MEAT =
       /\b(?:stock|broth|bouillon|sauce|powder|fat|drippings|gelatin|paste|seasoning|bacon|pancetta|lardons?|chorizo|anchov(?:y|ies))\b/i;
+
+    const METRIC_UNITS = ["g", "kg", "ml", "l", "oz", "fl_oz"];
+
+    // Reads a converted amount back as one number + unit: "1 1/2 cups" ->
+    // 1.5 cup, "1 tbsp 1 tsp" -> 4 tsp (two spoons add up in the smaller
+    // one), "2/3 lb" -> 0.667 lb. Returns null for "pinch" and the like.
+    function usAmountFromText(text) {
+      const PER_TSP = { cup: 48, tbsp: 3, tsp: 1 };
+      const terms = [...text.matchAll(/(\d+(?: \d+\/\d+)?|\d+\/\d+)\s+(cups?|tbsp|tsp|lb)\b/g)];
+      if (terms.length === 0 || terms.length > 2 || terms.map((term) => term[0]).join(" ") !== text.trim()) {
+        return null;
+      }
+      const parts = terms.map(([, amount, rawUnit]) => ({
+        amount: Number.parseFloat(normalizeFractionsInLine(amount)),
+        unit: rawUnit.startsWith("cup") ? "cup" : rawUnit
+      }));
+      if (parts.length === 1) {
+        return parts[0];
+      }
+      if (parts.some((part) => !(part.unit in PER_TSP))) {
+        return null;
+      }
+      const smaller = parts[1].unit;
+      const total = parts.reduce((sum, part) => sum + part.amount * PER_TSP[part.unit], 0);
+      return { amount: total / PER_TSP[smaller], unit: smaller };
+    }
 
     let scaleReference = null;
 
@@ -2318,6 +2378,20 @@
           ingredient: parsed.ingredient.replace(/\s*\(.*$/, "").replace(/,.*$/, "").trim()
         };
 
+        // A metric anchor is shown the way the converted recipe shows it —
+        // "tamarind concentrate = 1.5 cups", never "= 454 g" — so the target
+        // you type is in the same cups/spoons/pounds you're measuring with.
+        if (METRIC_UNITS.includes(parsed.unit)) {
+          const us = usAmountFromText(
+            convertAmountToText(parsed.unit, parsed.amount, parsed.ingredient).text
+          );
+          if (!us) {
+            continue;
+          }
+          candidate.amount = us.amount;
+          candidate.unit = us.unit;
+        }
+
         // For baking, flour is what you size a batch by — anchor on it
         // whenever the recipe has any, even if it isn't listed first.
         if (!firstFlour && /flour/i.test(parsed.ingredient)) {
@@ -2344,7 +2418,7 @@
     }
 
     function formatScaleValue(value) {
-      return String(Math.round(value * 1000) / 1000);
+      return String(Math.round(value * 100) / 100);
     }
 
     // Shows the "make <ingredient> = ___ <unit>" helper for the first scalable
@@ -2361,12 +2435,16 @@
       const factor = Number.isFinite(multiplier) && multiplier > 0 ? multiplier : 1;
 
       scaleToName.textContent = scaleReference.ingredient;
-      scaleToUnit.textContent = SCALE_UNIT_LABELS[scaleReference.unit];
 
       // Don't fight the user's cursor while they're typing a target.
       if (document.activeElement !== scaleToInput) {
         scaleToInput.value = formatScaleValue(scaleReference.amount * factor);
       }
+
+      // "1 cup", "2 cups".
+      const label = SCALE_UNIT_LABELS[scaleReference.unit];
+      scaleToUnit.textContent =
+        Number.parseFloat(scaleToInput.value) <= 1 ? label.replace(/(cup|pint|quart|gallon)s$/, "$1") : label;
 
       scaleToRow.hidden = false;
     }
